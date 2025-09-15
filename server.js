@@ -15,6 +15,10 @@ const Queue = require('express-queue');
 const winston = require('winston');
 require('winston-daily-rotate-file');
 const { BotPlayer, getRandomBotSpawnDelay, generateBotLightningAddress } = require('./botLogic');
+const { achievementSystem } = require('./achievements');
+const { tournamentManager, speedRoundManager, mysteryModeManager, GAME_MODES } = require('./gameModes');
+const { mysteryBoxManager } = require('./mysteryBoxes');
+const { streakSystem, globalLeaderboards } = require('./streaksAndLeaderboards');
 
 // Configure Winston logging with Sea Battle style loggers
 const transactionLogger = winston.createLogger({
@@ -183,7 +187,9 @@ const PAYOUTS = {
 const ALLOWED_BETS = [50, 300, 500, 1000, 5000, 10000];
 
 // --- In-memory stores ---
-const players = {}; // socketId -> { lightningAddress, acctId, betAmount, paid, gameId }
+const games = {}; // gameId -> game object
+const players = {}; // socketId -> player data
+const bots = {}; // botId -> BotPlayer instance
 const invoiceToSocket = {}; // invoiceId -> socketId
 const invoiceMeta = {}; // invoiceId -> { betAmount, lightningAddress }
 const userSessions = {}; // Maps acct_id to Lightning address
@@ -837,8 +843,7 @@ class Game {
   }
 }
 
-// Game management
-const games = {};
+// Game management  
 const waitingQueue = []; // Players waiting for match
 const botSpawnTimers = {}; // Track bot spawn timers
 
