@@ -24,91 +24,152 @@ export default function StartScreen({
   noticeMessage
 }) {
   const payoutAmount = BET_OPTIONS.find(o => o.amount === parseInt(betAmount, 10))?.winnings || 0;
+  const selectedBet = BET_OPTIONS.find(o => o.amount === parseInt(betAmount, 10));
 
   return (
     <div className="start-screen">
-      <div className="panel neo-panel glass">
-        <h2>Start New Game</h2>
-        <div className="subtitle">Win {payoutAmount} SATS</div>
+      <div className="panel neo-panel">
+        {/* Hero header */}
+        <div className="start-hero">
+          <div className="start-header">
+            <button 
+              className="back-btn"
+              onClick={() => window.history.back()}
+              aria-label="Go back"
+            >
+              ← Back
+            </button>
+            <h2>⚡ Start Game</h2>
+            <div className="win-highlight">
+              Win <strong>{payoutAmount.toLocaleString()} SATS</strong>
+            </div>
+          </div>
+          <p className="hero-sub">Pick your bet, pay once, get matched in seconds. Instant payouts if you win.</p>
+          <div className="badge-row">
+            <span className="badge ok"><span className="dot" /> Instant payouts</span>
+            <span className="badge info"><span className="dot" /> Fair matchmaking</span>
+            <span className="badge warn"><span className="dot" /> 5s turn timer</span>
+          </div>
+        </div>
 
-        {noticeMessage ? (
-          <p className="payment-msg" role="status" aria-live="polite" style={{marginTop: 8}}>
-            {noticeMessage}
-          </p>
-        ) : null}
+        {/* Status Messages */}
+        {noticeMessage && (
+          <div className="notice-message">
+            <p className="payment-msg" role="status" aria-live="polite">
+              {noticeMessage}
+            </p>
+          </div>
+        )}
 
-        <p className="notice-agree">
-          By playing the game you agree to our Terms & Conditions and Privacy Policy.
-        </p>
-        
+        {/* Connection Status */}
+        <div className="connection-status">
+          <div className={`status-indicator ${connected ? 'connected' : 'disconnected'}`}>
+            <div className="status-dot"></div>
+            <span>{connected ? 'Connected' : 'Connecting...'}</span>
+          </div>
+        </div>
+
+        {/* Lightning Address Input */}
         <div className="form-section">
-          <label htmlFor="ln-username">Lightning Username</label>
+          <label htmlFor="ln-address">Lightning Address</label>
           <div className="input-group">
-            <span className="prefix" aria-hidden>⚡</span>
+            <span className="input-prefix">⚡</span>
             <input 
-              id="ln-username" 
+              id="ln-address"
+              type="text"
               value={lightningAddress} 
               onChange={e => setLightningAddress(e.target.value)} 
               placeholder="username@speed.app" 
               disabled={addressLocked}
+              className="form-input"
             />
             {lightningAddress && !addressLocked && (
               <button 
                 type="button" 
-                className="suffix-btn" 
+                className="input-clear" 
                 onClick={() => setLightningAddress('')} 
-                aria-label="Clear username"
+                aria-label="Clear address"
               >
                 ✕
               </button>
             )}
           </div>
-          <small className="helper">Enter your Speed username or full Lightning address</small>
+          <small className="form-help">Enter your Speed username or full Lightning address</small>
         </div>
 
+        {/* Bet Amount Selection */}
         <div className="form-section">
-          <label>Select Bet Amount</label>
+          <label className="section-label">Choose Bet Amount</label>
           <div className="bet-grid">
-            {BET_OPTIONS.map(o => (
-              <label key={o.amount} className={`bet-chip ${String(o.amount) === String(betAmount) ? 'active' : ''}`}>
+            {BET_OPTIONS.map(option => (
+              <label key={option.amount} className={`bet-option ${String(option.amount) === String(betAmount) ? 'selected' : ''}`}>
                 <input 
                   type="radio" 
                   name="bet" 
-                  value={o.amount} 
-                  checked={String(o.amount) === String(betAmount)} 
-                  onChange={() => setBetAmount(String(o.amount))} 
+                  value={option.amount} 
+                  checked={String(option.amount) === String(betAmount)} 
+                  onChange={() => setBetAmount(String(option.amount))} 
+                  className="bet-radio"
                 />
-                <span className="amt">{o.amount} SATS</span>
-                <span className="win">Win {o.winnings}</span>
+                <div className="bet-content">
+                  <div className="bet-amount">{option.amount.toLocaleString()}</div>
+                  <div className="bet-unit">SATS</div>
+                  <div className="bet-arrow">→</div>
+                  <div className="bet-winnings">{option.winnings.toLocaleString()}</div>
+                </div>
               </label>
             ))}
           </div>
         </div>
 
+        {/* Payout strip */}
+        <div className="payout-row" aria-live="polite">
+          Bet <strong>{selectedBet?.amount.toLocaleString() || 0}</strong> → Win <strong>{selectedBet?.winnings.toLocaleString() || 0} SATS</strong>
+        </div>
+
+        {/* Terms & Conditions */}
         <div className="form-section">
           <label className="checkbox-label">
             <input 
               type="checkbox" 
               checked={acceptedTerms} 
-              onChange={(e) => setAcceptedTerms(e.target.checked)} 
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              className="checkbox-input"
             />
-            <span>
+            <span className="checkmark"></span>
+            <span className="checkbox-text">
               I agree to the{' '}
-              <button type="button" className="linklike" onClick={onOpenTerms}>Terms & Conditions</button>{' '}
+              <button type="button" className="link-button" onClick={onOpenTerms}>Terms & Conditions</button>{' '}
               and{' '}
-              <button type="button" className="linklike" onClick={onOpenPrivacy}>Privacy Policy</button>
+              <button type="button" className="link-button" onClick={onOpenPrivacy}>Privacy Policy</button>
             </span>
           </label>
         </div>
 
-        <div className="actions">
+        {/* Start Game Button */}
+        <div className="form-actions">
           <button 
-            className="neo-btn primary large" 
+            className={`neo-btn cta-main primary ${(!connected || !acceptedTerms || !lightningAddress) ? 'disabled' : ''}`}
             onClick={onStart} 
-            disabled={!connected || !acceptedTerms}
-            aria-label="Start Game"
+            disabled={!connected || !acceptedTerms || !lightningAddress}
           >
-            {connected ? 'Start Game' : 'Connecting...'}
+            <span className="btn-icon">⚡</span>
+            <span className="btn-text">
+              {!connected ? 'Connecting...' : 'Start Game'}
+            </span>
+            <small>Bet {selectedBet?.amount.toLocaleString() || 0} SATS</small>
+          </button>
+        </div>
+
+        {/* Sticky CTA on mobile */}
+        <div className="start-sticky">
+          <button
+            className={`neo-btn cta-main primary ${(!connected || !acceptedTerms || !lightningAddress) ? 'disabled' : ''}`}
+            onClick={onStart}
+            disabled={!connected || !acceptedTerms || !lightningAddress}
+            aria-label={!connected ? 'Connecting to server' : `Start game — Bet ${selectedBet?.amount || 0} SATS`}
+          >
+            ⚡ Start • {selectedBet?.amount.toLocaleString() || 0} → {selectedBet?.winnings.toLocaleString() || 0}
           </button>
         </div>
       </div>

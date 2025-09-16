@@ -1,0 +1,490 @@
+/* Mystery Box System Styles */
+.mystery-box-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.mystery-box-modal {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border-radius: 20px;
+  width: 95%;
+  max-width: 1000px;
+  max-height: 90vh;
+  overflow: hidden;
+  border: 2px solid #8b5cf6;
+  box-shadow: 0 25px 50px rgba(139, 92, 246, 0.4);
+  animation: slideUp 0.4s ease-out;
+}
+
+.mystery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px;
+  background: linear-gradient(90deg, #8b5cf6, #a855f7);
+  color: white;
+}
+
+.header-content h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.8rem;
+  font-weight: bold;
+}
+
+.box-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+.close-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.daily-box-claim {
+  background: linear-gradient(90deg, #059669, #10b981);
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.daily-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.daily-icon {
+  font-size: 2.5rem;
+  animation: bounce 2s infinite;
+}
+
+.daily-info h3 {
+  margin: 0;
+  color: white;
+  font-size: 1.2rem;
+}
+
+.daily-info p {
+  margin: 4px 0 0 0;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.9rem;
+}
+
+.claim-daily-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  padding: 12px 20px;
+  border-radius: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  margin-left: auto;
+  transition: all 0.3s ease;
+}
+
+.claim-daily-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+}
+
+.boxes-section {
+  padding: 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.boxes-section:last-child {
+  border-bottom: none;
+}
+
+.section-header h3 {
+  color: white;
+  margin: 0 0 16px 0;
+  font-size: 1.3rem;
+}
+
+.no-boxes {
+  text-align: center;
+  padding: 40px 20px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.empty-icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 16px;
+}
+
+.no-boxes p {
+  margin: 8px 0;
+}
+
+.hint {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.boxes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.mystery-box-item {
+  background: linear-gradient(135deg, #334155 0%, #1e293b 100%);
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+  position: relative;
+  overflow: hidden;
+}
+
+.mystery-box-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(circle at center, var(--glow-color), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.mystery-box-item:hover {
+  transform: translateY(-6px) scale(1.02);
+  border-color: var(--glow-color);
+  box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
+}
+
+.mystery-box-item:hover::before {
+  opacity: 0.1;
+}
+
+.box-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 0 10px var(--glow-color));
+  animation: float 3s ease-in-out infinite;
+}
+
+.mystery-box-item h4 {
+  color: white;
+  margin: 0 0 8px 0;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+
+.mystery-box-item p {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  margin: 0 0 12px 0;
+  line-height: 1.4;
+}
+
+.rarity-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.rarity-badge.common { background: #10b981; color: white; }
+.rarity-badge.uncommon { background: #3b82f6; color: white; }
+.rarity-badge.rare { background: #8b5cf6; color: white; }
+.rarity-badge.legendary { background: #f59e0b; color: white; }
+.rarity-badge.epic { background: #ef4444; color: white; }
+
+.earned-reason {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+}
+
+.history-grid {
+  display: grid;
+  gap: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.history-icon {
+  font-size: 1.5rem;
+  opacity: 0.7;
+}
+
+.history-info {
+  flex: 1;
+}
+
+.history-name {
+  display: block;
+  color: white;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.history-rewards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reward-item {
+  background: rgba(139, 92, 246, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.box-opening-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.opening-animation {
+  text-align: center;
+  color: white;
+}
+
+.opening-box {
+  font-size: 6rem;
+  margin-bottom: 24px;
+  filter: drop-shadow(0 0 20px var(--glow-color));
+}
+
+.box-shake {
+  animation: shake 0.5s infinite;
+}
+
+.opening-animation h3 {
+  font-size: 1.5rem;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.rewards-celebration {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: celebrate 0.5s ease-out;
+}
+
+.celebration-content {
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  border-radius: 20px;
+  padding: 40px;
+  text-align: center;
+  border: 2px solid #10b981;
+  box-shadow: 0 25px 50px rgba(16, 185, 129, 0.3);
+  animation: celebrationPop 0.6s ease-out;
+}
+
+.celebration-content h2 {
+  color: white;
+  margin: 0 0 24px 0;
+  font-size: 2rem;
+  animation: rainbow 2s ease-in-out infinite;
+}
+
+.rewards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.reward-celebration {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reward-celebration .reward-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(90deg, #10b981, #059669);
+  padding: 16px 20px;
+  border-radius: 12px;
+  color: white;
+  font-weight: bold;
+  animation: rewardSlide 0.8s ease-out;
+}
+
+.reward-icon {
+  font-size: 1.5rem;
+}
+
+.reward-text {
+  font-size: 1.1rem;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-8px); }
+  60% { transform: translateY(-4px); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-3px); }
+  20%, 40%, 60%, 80% { transform: translateX(3px); }
+}
+
+@keyframes celebrate {
+  from { 
+    opacity: 0;
+    backdrop-filter: blur(0px);
+  }
+  to { 
+    opacity: 1;
+    backdrop-filter: blur(10px);
+  }
+}
+
+@keyframes celebrationPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) translateY(30px);
+  }
+  70% {
+    transform: scale(1.05) translateY(-5px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes rewardSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes rainbow {
+  0% { color: #ff6b6b; }
+  16% { color: #4ecdc4; }
+  32% { color: #45b7d1; }
+  48% { color: #96ceb4; }
+  64% { color: #ffeaa7; }
+  80% { color: #dda0dd; }
+  100% { color: #ff6b6b; }
+}
+
+@media (max-width: 768px) {
+  .boxes-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .mystery-header {
+    padding: 16px;
+  }
+  
+  .header-content h2 {
+    font-size: 1.4rem;
+  }
+  
+  .box-stats {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .daily-content {
+    flex-direction: column;
+    text-align: center;
+  }
+  
+  .opening-box {
+    font-size: 4rem;
+  }
+  
+  .celebration-content {
+    padding: 24px;
+    margin: 16px;
+  }
+  
+  .celebration-content h2 {
+    font-size: 1.6rem;
+  }
+}

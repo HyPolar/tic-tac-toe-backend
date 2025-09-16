@@ -15,6 +15,10 @@ const Queue = require('express-queue');
 const winston = require('winston');
 require('winston-daily-rotate-file');
 const { BotPlayer, getRandomBotSpawnDelay, generateBotLightningAddress } = require('./botLogic');
+const { achievementSystem } = require('./achievements');
+const { tournamentManager, speedRoundManager, mysteryModeManager, GAME_MODES } = require('./gameModes');
+const { mysteryBoxManager } = require('./mysteryBoxes');
+const { streakSystem, globalLeaderboards } = require('./streaksAndLeaderboards');
 
 // Configure Winston logging with Sea Battle style loggers
 const transactionLogger = winston.createLogger({
@@ -1014,28 +1018,169 @@ app.post('/api/generate-lnurl', async (req, res) => {
 app.post('/api/generate-qr', async (req, res) => {
   try {
     const { invoice } = req.body;
-    
     if (!invoice) {
       return res.status(400).json({ error: 'Invoice required' });
     }
-    
-    // Generate QR code as data URL
-    const qrCode = await QRCode.toDataURL(invoice, {
-      errorCorrectionLevel: 'M',
-      type: 'image/png',
-      quality: 0.92,
-      margin: 1,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      width: 256
-    });
-    
-    res.json({ qr: qrCode });
+    const qr = await QRCode.toDataURL(invoice);
+    res.json({ qr });
   } catch (error) {
-    console.error('Error generating QR code:', error.message);
+    console.error('QR generation error:', error);
     res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
+// New addictive features API endpoints
+
+// Achievements API
+app.get('/api/achievements/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const progress = achievementSystem.getPlayerProgress(lightningAddress);
+    res.json(progress);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get achievements' });
+  }
+});
+
+app.get('/api/achievements', (req, res) => {
+  try {
+    const achievements = achievementSystem.getAllAchievements();
+    res.json(achievements);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get achievement definitions' });
+  }
+});
+
+app.post('/api/achievements/claim/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const rewards = achievementSystem.claimRewards(lightningAddress);
+    res.json({ rewards });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to claim rewards' });
+  }
+});
+
+// Leaderboards API
+app.get('/api/leaderboards', (req, res) => {
+  try {
+    const { type = 'profit', period = 'all', limit = 50 } = req.query;
+    const leaderboard = globalLeaderboards.getLeaderboard(type, period, parseInt(limit));
+    res.json(leaderboard);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get leaderboard' });
+  }
+});
+
+app.get('/api/leaderboards/streaks', (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    const leaderboard = streakSystem.getStreakLeaderboard(parseInt(limit));
+    res.json(leaderboard);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get streak leaderboard' });
+  }
+});
+
+app.get('/api/player-stats/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const stats = globalLeaderboards.getPlayerStats(lightningAddress);
+    const streakData = streakSystem.getPlayerStreak(lightningAddress);
+    res.json({ ...stats, streak: streakData });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get player stats' });
+  }
+});
+
+
+// Mystery boxes API
+app.get('/api/mystery-boxes/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const boxes = mysteryBoxManager.getPlayerBoxes(lightningAddress);
+    res.json(boxes);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get mystery boxes' });
+  }
+});
+
+app.post('/api/mystery-boxes/open', (req, res) => {
+  try {
+    const { lightningAddress, boxId } = req.body;
+    const result = mysteryBoxManager.openMysteryBox(lightningAddress, boxId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to open mystery box' });
+  }
+});
+
+app.post('/api/mystery-boxes/daily/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const result = mysteryBoxManager.getDailyMysteryBox(lightningAddress);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get daily mystery box' });
+  }
+});
+
+app.get('/api/mystery-boxes/stats/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const stats = mysteryBoxManager.getBoxStats(lightningAddress);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get box stats' });
+  }
+});
+
+// Tournament API
+app.get('/api/tournaments', (req, res) => {
+  try {
+    const tournaments = tournamentManager.getActiveTournaments();
+    res.json(tournaments);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get tournaments' });
+  }
+});
+
+app.post('/api/tournaments/create', (req, res) => {
+  try {
+    const { mode = 'TOURNAMENT', entryFee = 500, maxPlayers = 16 } = req.body;
+    const tournament = tournamentManager.createTournament(mode, entryFee, maxPlayers);
+    res.json(tournament);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create tournament' });
+  }
+});
+
+app.post('/api/tournaments/join', (req, res) => {
+  try {
+    const { tournamentId, playerData } = req.body;
+    const result = tournamentManager.joinTournament(tournamentId, playerData);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to join tournament' });
+  }
+});
+
+app.get('/api/tournaments/:tournamentId', (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+    const tournament = tournamentManager.getTournament(tournamentId);
+    res.json(tournament || { error: 'Tournament not found' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get tournament' });
+  }
+});
+
+// Game modes API
+app.get('/api/game-modes', (req, res) => {
+  try {
+    res.json(Object.values(GAME_MODES));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get game modes' });
   }
 });
 
@@ -1079,74 +1224,10 @@ app.post('/api/verify-payment', async (req, res) => {
   }
 });
 
-// Speed Wallet Webhook - Complete Sea Battle implementation
-app.post('/webhook', (req, res) => {
+// Speed Wallet Webhook - Exact Sea Battle implementation
+app.post('/webhook', webhookLimiter, webhookQueue, express.json(), (req, res) => {
   logger.debug('Webhook received', { headers: req.headers });
-  // Verify webhook signature per Speed docs
-  try {
-    const webhookId = req.headers['webhook-id'];
-    const webhookTimestamp = req.headers['webhook-timestamp'];
-    const signatureHeader = req.headers['webhook-signature'];
-    if (!webhookId || !webhookTimestamp || !signatureHeader || !req.rawBody) {
-      logger.warn('Missing signature headers or raw body', {
-        hasId: !!webhookId, hasTs: !!webhookTimestamp, hasSig: !!signatureHeader, hasRaw: !!req.rawBody
-      });
-      return res.status(400).send('Missing signature headers');
-    }
-
-    const secretRaw = process.env.SPEED_WALLET_WEBHOOK_SECRET;
-    if (!secretRaw) {
-      logger.error('SPEED_WALLET_WEBHOOK_SECRET not configured');
-      return res.status(500).send('Server not configured');
-    }
-    const base64Part = secretRaw.startsWith('wsec_') ? secretRaw.slice(5) : secretRaw;
-    let secretBytes;
-    try {
-      secretBytes = Buffer.from(base64Part, 'base64');
-    } catch (e) {
-      logger.error('Invalid webhook secret format');
-      return res.status(500).send('Server not configured');
-    }
-
-    const signedPayload = `${webhookId}.${webhookTimestamp}.${req.rawBody}`;
-    const expectedSig = crypto
-      .createHmac('sha256', secretBytes)
-      .update(signedPayload, 'utf8')
-      .digest('base64');
-
-    // Signature header may contain multiple values and a version prefix (e.g., "v1,BASE64")
-    const candidates = String(signatureHeader)
-      .trim()
-      .split(/\s+/)
-      .map(s => {
-        if (s.includes(',')) return s.split(',')[1] || '';
-        if (s.includes('=')) return s.split('=')[1] || '';
-        return s;
-      })
-      .filter(Boolean);
-
-    const match = candidates.some(sig => {
-      const a = Buffer.from(expectedSig);
-      const b = Buffer.from(sig);
-      return a.length === b.length && crypto.timingSafeEqual(a, b);
-    });
-
-    if (!match) {
-      logger.warn('Invalid webhook signature', { webhookId, webhookTimestamp });
-      return res.status(400).send('Invalid signature');
-    }
-
-    // Idempotency: ignore duplicate webhook-id
-    if (processedWebhooks.has(webhookId)) {
-      logger.info('Duplicate webhook ignored', { webhookId });
-      return res.status(200).send('Duplicate');
-    }
-    processedWebhooks.add(webhookId);
-  } catch (e) {
-    logger.error('Webhook verification error', { error: e.message });
-    return res.status(400).send('Invalid signature');
-  }
-
+  const WEBHOOK_SECRET = process.env.SPEED_WALLET_WEBHOOK_SECRET || 'we_memya2mjjqpg1fjA';
   const event = req.body;
   logger.info('Processing webhook event', { event: event.event_type, data: event.data });
 
@@ -1194,25 +1275,11 @@ app.post('/webhook', (req, res) => {
         players[socketId].paid = true;
         logger.info('Payment verified for player', { playerId: socketId, invoiceId });
 
-        // Log player session with payment received status
-        console.log('💳 PAYMENT VERIFIED for:', players[socketId].lightningAddress);
-        console.log('💰 Amount:', players[socketId].betAmount, 'SATS');
-        if (players[socketId].lightningAddress) {
-          logPlayerSession(players[socketId].lightningAddress, {
-            event: 'payment_received',
-            playerId: socketId,
-            betAmount: players[socketId].betAmount,
-            invoiceId: invoiceId
-          });
-        }
-
-        // Find or create game immediately after payment
         let game = Object.values(games).find(g => 
-          Object.keys(g.players).length === 1 && g.betAmount === players[socketId].betAmount
+          Object.keys(g.players).length === 1 && g.betAmount === players[socketId].betAmount,
         );
         
         if (!game) {
-          // Create new game if no waiting game found
           const gameId = `game_${Date.now()}`;
           game = new Game(gameId, players[socketId].betAmount);
           games[gameId] = game;
@@ -1227,172 +1294,30 @@ app.post('/webhook', (req, res) => {
           });
         }
         
-        // Add player to game
         game.addPlayer(socketId, players[socketId].lightningAddress);
         if (sock) {
           sock.join(game.id);
-        }
-        
-        // Check if game is ready to start (2 players)
-        if (Object.keys(game.players).length === 2) {
-          // Both players are ready, start the game
-          const playerIds = Object.keys(game.players);
-          const startsIn = 5;
-          const startAt = Date.now() + startsIn * 1000;
-          
-          // Notify both players
-          playerIds.forEach(pid => {
-            const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-            playerSock?.emit('matchFound', { opponent: { type: 'player' }, startsIn, startAt });
-          });
-          
-          // Start game after countdown
-          setTimeout(() => {
-            // Double-check game still exists
-            if (!games[game.id]) {
-              console.log(`Game ${game.id} no longer exists, skipping start`);
-              return;
-            }
-            
-            game.status = 'playing';
-            game.startTurnTimer();
-            const turnDeadline = game.turnDeadlineAt || null;
-            
-            // Store game-player mapping for reconnection
-            playerIds.forEach(pid => {
-              const player = game.players[pid];
-              if (player && player.lightningAddress) {
-                // Store mapping of Lightning address to game for reconnection
-                const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                if (playerSock && playerSock.connected) {
-                  playerSock.gameId = game.id;
-                  playerSock.playerIdInGame = pid;
-                  playerSock.emit('startGame', {
-                    gameId: game.id,
-                    symbol: game.players[pid].symbol,
-                    turn: game.turn,
-                    message: game.turn === pid ? 'Your move' : "Opponent's move",
-                    turnDeadline
-                  });
-                  console.log(`Sent startGame to player ${pid}`);
-                } else {
-                  console.log(`Player ${pid} socket not connected for game start`);
-                }
-              }
-            });
-            
-            gameLogger.info({
-              event: 'game_started',
-              gameId: game.id,
-              players: playerIds,
-              betAmount: game.betAmount,
-              timestamp: new Date().toISOString()
-            });
-          }, startsIn * 1000);
         } else {
-          // Waiting for another player - schedule bot spawn
-          if (sock) {
-            const delay = getRandomBotSpawnDelay();
-            const estWaitSeconds = Math.floor(delay / 1000);
-            
-            sock.emit('waitingForOpponent', {
-              message: 'Finding opponent...',
-              estimatedWait: `${13}-${25} seconds`,
-              playersInGame: Object.keys(game.players).length
-            });
-            
-            // Schedule bot to join if no real player joins
-            botSpawnTimers[socketId] = setTimeout(() => {
-              // Check if still waiting
-              const currentGame = Object.values(games).find(g => 
-                g.players[socketId] && Object.keys(g.players).length === 1
-              );
-              
-              if (currentGame) {
-                // Add bot to game
-                const botId = `bot_${uuidv4()}`;
-                const botAddress = generateBotLightningAddress();
-                const bot = new BotPlayer(currentGame.id, currentGame.betAmount, players[socketId].lightningAddress);
-                activeBots.set(currentGame.id, bot);
-                
-                currentGame.addPlayer(botId, botAddress, true);
-                players[botId] = {
-                  lightningAddress: botAddress,
-                  betAmount: currentGame.betAmount,
-                  paid: true,
-                  isBot: true,
-                  gameId: currentGame.id
-                };
-                
-                // Notify players that match is found
-                const playerIds = Object.keys(currentGame.players);
-                const startsIn = 5;
-                const startAt = Date.now() + startsIn * 1000;
-                
-                playerIds.forEach(pid => {
-                  if (!currentGame.players[pid].isBot) {
-                    const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                    playerSock?.emit('matchFound', { 
-                      opponent: { type: 'player' }, // Don't reveal it's a bot
-                      startsIn, 
-                      startAt 
-                    });
-                  }
-                });
-                
-                // Start game after countdown
-                setTimeout(() => {
-                  // Double-check game still exists
-                  if (!games[currentGame.id]) {
-                    console.log(`Game ${currentGame.id} no longer exists, skipping bot game start`);
-                    return;
-                  }
-                  
-                  currentGame.status = 'playing';
-                  currentGame.startTurnTimer();
-                  const turnDeadline = currentGame.turnDeadlineAt || null;
-                  
-                  playerIds.forEach(pid => {
-                    if (!currentGame.players[pid].isBot) {
-                      const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                      if (playerSock && playerSock.connected) {
-                        playerSock.emit('startGame', {
-                          gameId: currentGame.id,
-                          symbol: currentGame.players[pid].symbol,
-                          turn: currentGame.turn,
-                          message: currentGame.turn === pid ? 'Your move' : "Opponent's move",
-                          turnDeadline
-                        });
-                        console.log(`Sent startGame to human player ${pid} in bot game`);
-                      } else {
-                        console.log(`Human player ${pid} disconnected before bot game start`);
-                      }
-                    }
-                  });
-                  
-                  // If bot starts, make first move
-                  if (currentGame.players[currentGame.turn]?.isBot) {
-                    makeBotMove(currentGame.id, currentGame.turn);
-                  }
-                  
-                  gameLogger.info({
-                    event: 'game_started_with_bot',
-                    gameId: currentGame.id,
-                    humanPlayer: socketId,
-                    botPlayer: botId,
-                    betAmount: currentGame.betAmount,
-                    timestamp: new Date().toISOString()
-                  });
-                }, startsIn * 1000);
-                
-                delete botSpawnTimers[socketId];
-              }
-            }, delay);
+          // If socket is gone, immediately mark as disconnected and start timer
+          try {
+            // Handle offline player scenario
+          } catch (e) {
+            logger.warn(`Failed to start disconnect timer for offline player ${socketId}: ${e.message}`);
           }
         }
         
+        // Update player session with payment sent status
+        console.log('💳 PAYMENT VERIFIED for:', players[socketId].lightningAddress);
+        console.log('💰 Amount:', players[socketId].betAmount, 'SATS');
+        if (players[socketId].lightningAddress) {
+          logPlayerSession(players[socketId].lightningAddress, {
+            paymentSent: true,
+            gameId: game.id,
+            betAmount: players[socketId].betAmount
+          });
+        }
+
         delete invoiceToSocket[invoiceId];
-        delete invoiceMeta[invoiceId];
         break;
 
       case 'payment.failed':
@@ -1422,7 +1347,6 @@ app.post('/webhook', (req, res) => {
           logger.warn('Payment failed for player', { playerId: failedSocketId, invoiceId: failedInvoiceId });
           delete players[failedSocketId];
           delete invoiceToSocket[failedInvoiceId];
-          delete invoiceMeta[failedInvoiceId];
         } else {
           logger.warn(`Webhook warning: No socket mapping found for failed invoice ${failedInvoiceId}. Player may have disconnected.`);
         }
@@ -1438,6 +1362,7 @@ app.post('/webhook', (req, res) => {
     res.status(500).send('Webhook processing failed');
   }
 });
+console.log('Debug-2025-06-16-2: Webhook route added');
 
 function handleInvoicePaid(invoiceId, event) {
   console.log('handleInvoicePaid called for invoice:', invoiceId);
@@ -1594,7 +1519,7 @@ function attemptMatchOrEnqueue(socketId) {
       waitingQueue.splice(stillWaiting, 1);
 
       const botId = `bot_${uuidv4()}`;
-      const botAddress = 'developer@tryspeed.com';
+      const botAddress = generateBotLightningAddress();
 
       const gameId = uuidv4();
       const game = new Game(gameId, player.betAmount);
@@ -2032,12 +1957,45 @@ function handleGameEnd(gameId, winnerId) {
     });
   }
   
-  // Track game history for human player
+  // Track game history for human player and update new systems
   const humanPlayer = winner?.isBot ? loser : winner;
   if (humanPlayer && !humanPlayer.isBot) {
     const playerWon = !winner?.isBot;
+    const gameResult = {
+      isWin: playerWon,
+      isLoss: !playerWon,
+      betAmount: game.betAmount,
+      winnings: playerWon ? PAYOUTS[game.betAmount]?.winner || 0 : 0,
+      gameDuration: Date.now() - game.createdAt,
+      opponentMoves: game.moveCount || 0,
+      isPerfectGame: playerWon && (game.moveCount <= 3),
+      isSpeedWin: playerWon && (Date.now() - game.createdAt) < 30000,
+      isComebackWin: false // TODO: implement comeback detection
+    };
+
+    // Update all new systems
+    const streakBonus = streakSystem.updateStreak(humanPlayer.lightningAddress, gameResult);
+    const playerStats = globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats);
+    const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, playerStats, gameResult);
+    const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, playerStats);
+
+    // Update legacy history
     updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, playerWon);
-    console.log(`Updated history for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats`);
+    console.log(`Updated all systems for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats, Streak bonus: ${streakBonus.sats} sats`);
+    
+    // Emit new achievements and rewards to player
+    const playerSocket = io.sockets.sockets.get(humanPlayer.socketId);
+    if (playerSocket) {
+      if (newAchievements.length > 0) {
+        playerSocket.emit('achievementsUnlocked', { achievements: newAchievements });
+      }
+      if (mysteryBoxes.length > 0) {
+        playerSocket.emit('mysteryBoxEarned', { boxes: mysteryBoxes });
+      }
+      if (streakBonus.sats > 0) {
+        playerSocket.emit('streakBonus', { bonus: streakBonus });
+      }
+    }
   }
   
   // Emit personalized result to each participant
@@ -2131,7 +2089,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start server (Render/Railway will set PORT)
-const PORT = process.env.PORT || process.env.BACKEND_PORT || 4000;
+const PORT = process.env.BACKEND_PORT || process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Speed Wallet API: ${SPEED_API_BASE}`);

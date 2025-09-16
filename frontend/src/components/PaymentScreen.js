@@ -6,7 +6,8 @@ export default function PaymentScreen({
   message,
   onCopyPayment,
   onCancel,
-  qrCode
+  qrCode,
+  paymentTimer // Added Sea Battle timer prop
 }) {
   const [showInlineWindow, setShowInlineWindow] = useState(true);
 
@@ -31,6 +32,14 @@ export default function PaymentScreen({
       <div className="panel neo-panel glass">
         <h2>Payment Required</h2>
         <p className="payment-msg">{message}</p>
+        
+        {/* Payment timer - Sea Battle implementation */}
+        {paymentTimer !== undefined && (
+          <div className="payment-timer">
+            <span className="timer-label">Time remaining:</span>
+            <span className="timer-value">{Math.floor(paymentTimer / 60)}:{(paymentTimer % 60).toString().padStart(2, '0')}</span>
+          </div>
+        )}
 
         {/* Same‑page payment window (no new tab) */}
         {showInlineWindow && payUrl ? (

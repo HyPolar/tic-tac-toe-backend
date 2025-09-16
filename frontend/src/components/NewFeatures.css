@@ -1,0 +1,224 @@
+/* Additional Styles for New Features */
+
+/* Feature Navigation */
+.feature-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.feature-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  color: white;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.feature-btn:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+}
+
+.feature-btn.achievements:hover {
+  border-color: #f59e0b;
+  box-shadow: 0 8px 20px rgba(245, 158, 11, 0.3);
+}
+
+.feature-btn.leaderboards:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
+}
+
+.feature-btn.mystery-boxes:hover {
+  border-color: #10b981;
+  box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
+}
+
+
+.notification-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 12px;
+  height: 12px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+/* Player Stats Summary */
+.player-summary {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  min-width: 80px;
+}
+
+.stat-value {
+  color: #f59e0b;
+  font-weight: bold;
+  font-size: 1.2rem;
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Notification Styles */
+.achievement-notification,
+.mysterybox-notification,
+.streak-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  border: 2px solid #f59e0b;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  z-index: 9999;
+  animation: slideInRight 0.5s ease-out, fadeOut 0.5s ease-out 4.5s;
+  pointer-events: none;
+}
+
+.mysterybox-notification {
+  border-color: #10b981;
+}
+
+.streak-notification {
+  border-color: #ef4444;
+}
+
+.achievement-content,
+.mysterybox-content,
+.streak-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.achievement-icon,
+.mysterybox-icon,
+.streak-icon {
+  font-size: 2rem;
+}
+
+.achievement-text h4,
+.mysterybox-text h4,
+.streak-text h4 {
+  margin: 0 0 4px 0;
+  color: white;
+  font-size: 1rem;
+}
+
+.achievement-text p,
+.mysterybox-text p,
+.streak-text p {
+  margin: 0 0 4px 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9rem;
+}
+
+.reward,
+.reason {
+  color: #f59e0b;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (max-width: 768px) {
+  .feature-nav {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  
+  .feature-btn {
+    padding: 12px 16px;
+    font-size: 0.85rem;
+  }
+  
+  .player-summary {
+    gap: 8px;
+  }
+  
+  .stat-card {
+    padding: 8px 12px;
+    min-width: 60px;
+  }
+  
+  .stat-value {
+    font-size: 1rem;
+  }
+  
+  .stat-label {
+    font-size: 0.7rem;
+  }
+  
+  .achievement-notification,
+  .mysterybox-notification,
+  .streak-notification {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    right: 10px;
+  }
+}
