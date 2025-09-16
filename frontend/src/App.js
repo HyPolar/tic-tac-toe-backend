@@ -7,11 +7,7 @@ import StartScreen from './components/StartScreen';
 import PaymentScreen from './components/PaymentScreen';
 import WaitingScreen from './components/WaitingScreen';
 import GameScreen from './components/GameScreen';
-import AchievementSystem from './components/AchievementSystem';
-import MysteryBoxes from './components/MysteryBoxes';
-import LeaderboardSystem from './components/LeaderboardSystem';
 import './styles.css';
-import './components/NewFeatures.css';
 const PAYOUTS = {
   50: { winner: 80 },
   300: { winner: 500 },
@@ -86,14 +82,6 @@ export default function App() {
   const matchIntervalRef = useRef(null);
   const [matchSecondsLeft, setMatchSecondsLeft] = useState(null);
 
-  // New addictive features state
-  const [showAchievements, setShowAchievements] = useState(false);
-  const [showMysteryBoxes, setShowMysteryBoxes] = useState(false);
-  const [showLeaderboards, setShowLeaderboards] = useState(false);
-  const [playerSats, setPlayerSats] = useState(0);
-  const [newAchievement, setNewAchievement] = useState(null);
-  const [newMysteryBox, setNewMysteryBox] = useState(null);
-  const [streakBonus, setStreakBonus] = useState(0);
 
   // History
   const [history, setHistory] = useState(() => {
@@ -771,73 +759,7 @@ export default function App() {
       )}
       <div ref={confettiRef} className="confetti-layer" />
 
-      {/* Achievement Notification */}
-      {newAchievement && (
-        <div className="achievement-notification">
-          <div className="achievement-content">
-            <span className="achievement-icon">🏆</span>
-            <div className="achievement-text">
-              <h4>Achievement Unlocked!</h4>
-              <p>{newAchievement.achievement.name}</p>
-              <span className="reward">+{newAchievement.reward} sats</span>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Mystery Box Notification */}
-      {newMysteryBox && (
-        <div className="mysterybox-notification">
-          <div className="mysterybox-content">
-            <span className="mysterybox-icon">🎁</span>
-            <div className="mysterybox-text">
-              <h4>Mystery Box Earned!</h4>
-              <p>{newMysteryBox.boxType} Box</p>
-              <span className="reason">{newMysteryBox.reason}</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Streak Bonus Notification */}
-      {streakBonus > 0 && (
-        <div className="streak-notification">
-          <div className="streak-content">
-            <span className="streak-icon">🔥</span>
-            <div className="streak-text">
-              <h4>Streak Bonus!</h4>
-              <p>+{streakBonus} sats bonus</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Feature Modals */}
-      {showAchievements && (
-        <AchievementSystem 
-          lightningAddress={lightningAddress}
-          isOpen={showAchievements}
-          onClose={() => setShowAchievements(false)}
-          socket={socket}
-        />
-      )}
-      
-      {showMysteryBoxes && (
-        <MysteryBoxes 
-          lightningAddress={lightningAddress}
-          isOpen={showMysteryBoxes}
-          onClose={() => setShowMysteryBoxes(false)}
-          socket={socket}
-        />
-      )}
-      
-      {showLeaderboards && (
-        <LeaderboardSystem 
-          lightningAddress={lightningAddress}
-          isOpen={showLeaderboards}
-          onClose={() => setShowLeaderboards(false)}
-        />
-      )}
 
       {showSettings && (
         <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
@@ -1569,74 +1491,8 @@ export default function App() {
           </div>
         )}
 
-      {/* New Feature Modals */}
-      {showAchievements && (
-        <AchievementSystem 
-          isOpen={showAchievements} 
-          onClose={() => setShowAchievements(false)}
-          lightningAddress={lightningAddress}
-          socket={socket}
-        />
-      )}
-
-      {showMysteryBoxes && (
-        <MysteryBoxes 
-          isOpen={showMysteryBoxes} 
-          onClose={() => setShowMysteryBoxes(false)}
-          lightningAddress={lightningAddress}
-          socket={socket}
-        />
-      )}
-
-      {showLeaderboards && (
-        <LeaderboardSystem 
-          isOpen={showLeaderboards} 
-          onClose={() => setShowLeaderboards(false)}
-          lightningAddress={lightningAddress}
-          socket={socket}
-        />
-      )}
 
 
-      {/* Notifications */}
-      {newAchievement && (
-        <div className="achievement-notification">
-          <div className="achievement-content">
-            <div className="achievement-icon">🏆</div>
-            <div className="achievement-text">
-              <h4>Achievement Unlocked!</h4>
-              <p>{newAchievement.name}</p>
-              <p className="reward">+{newAchievement.reward} sats</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {newMysteryBox && (
-        <div className="mysterybox-notification">
-          <div className="mysterybox-content">
-            <div className="mysterybox-icon">🎁</div>
-            <div className="mysterybox-text">
-              <h4>Mystery Box Received!</h4>
-              <p>{newMysteryBox.boxType} Box</p>
-              <p className="reason">{newMysteryBox.reason}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {streakBonus && (
-        <div className="streak-notification">
-          <div className="streak-content">
-            <div className="streak-icon">🔥</div>
-            <div className="streak-text">
-              <h4>Streak Bonus!</h4>
-              <p>Win streak: {streakBonus.streak}</p>
-              <p className="reward">+{streakBonus.bonus} sats bonus</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div ref={confettiRef} className="confetti-container"></div>
     </div>
