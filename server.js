@@ -349,6 +349,7 @@ async function createLightningInvoice(amountSats, customerId, orderId) {
     });
 
     const data = resp.data;
+    console.log(`Speed API Response (${label}):`, JSON.stringify(data, null, 2));
     const invoiceId = data.id;
     const hostedInvoiceUrl = data.hosted_invoice_url || data.hosted_checkout_url || data.checkout_url || null;
 
