@@ -14,6 +14,7 @@ const { bech32 } = require('bech32');
 const Queue = require('express-queue');
 const winston = require('winston');
 require('winston-daily-rotate-file');
+const logForwarder = require('./log-forwarder');
 const { BotPlayer, getRandomBotSpawnDelay, generateBotLightningAddress } = require('./botLogic');
 const { achievementSystem } = require('./achievements');
 const { tournamentManager, speedRoundManager, mysteryModeManager, GAME_MODES } = require('./gameModes');
@@ -89,13 +90,37 @@ const playerSessionLogger = winston.createLogger({
   ]
 });
 
-// Helper function to log player sessions
+// Helper function to log player sessions - Sea Battle implementation
 function logPlayerSession(lightningAddress, sessionData) {
-  playerSessionLogger.info({
+  // Compute derived values for better observability
+  const sessionEntry = {
     lightningAddress,
-    ...sessionData,
-    timestamp: new Date().toISOString()
-  });
+    timestamp: new Date().toISOString(),
+    sessionData,
+    // Core tracking fields
+    gameId: sessionData.gameId || null,
+    playerId: sessionData.playerId || null,
+    betAmount: sessionData.betAmount || null,
+    paymentSent: sessionData.paymentSent || false,
+    paymentReceived: sessionData.paymentReceived || false,
+    gameResult: sessionData.gameResult || null, // 'won', 'lost', 'disconnected'
+    disconnectedDuringGame: sessionData.disconnectedDuringGame || false,
+    opponentType: sessionData.opponentType || null, // 'human', 'bot'
+    payoutAmount: sessionData.payoutAmount || 0,
+    payoutStatus: sessionData.payoutStatus || null // 'sent', 'failed', 'not_applicable'
+  };
+  
+  console.log('🎮 PLAYER SESSION LOG:', lightningAddress);
+  console.log('📊 Game Result:', sessionEntry.gameResult);
+  console.log('💰 Bet Amount:', sessionEntry.betAmount, 'SATS');
+  console.log('🏆 Payout:', sessionEntry.payoutAmount, 'SATS');
+  console.log('----------------------------------------');
+  
+  // Forward to local PC
+  logForwarder.logPlayerSession(lightningAddress, sessionEntry.sessionData);
+  
+  playerSessionLogger.info(sessionEntry);
+  return sessionEntry;
 }
 
 const logger = winston.createLogger({
@@ -187,9 +212,7 @@ const PAYOUTS = {
 const ALLOWED_BETS = [50, 300, 500, 1000, 5000, 10000];
 
 // --- In-memory stores ---
-const games = {}; // gameId -> game object
-const players = {}; // socketId -> player data
-const bots = {}; // botId -> BotPlayer instance
+const players = {}; // socketId -> { lightningAddress, acctId, betAmount, paid, gameId }
 const invoiceToSocket = {}; // invoiceId -> socketId
 const invoiceMeta = {}; // invoiceId -> { betAmount, lightningAddress }
 const userSessions = {}; // Maps acct_id to Lightning address
@@ -388,28 +411,39 @@ async function createLightningInvoice(amountSats, customerId, orderId) {
   throw new Error('No valid invoice auth mode available. Set SPEED_INVOICE_AUTH_MODE to publishable|secret|auto.');
 }
 
-// New Speed Wallet payment via /payments (BOLT11 or Lightning address)
-async function sendPayment(destination, amount, note = '') {
+// Sea Battle exact payment implementation via /payments (BOLT11 or Lightning address)
+async function sendPayment(destination, amount, currency) {
   try {
-    let invoice = destination;
+    let invoice;
 
-    if (typeof destination === 'string') {
-      const lower = destination.toLowerCase();
-      if (lower.startsWith('lnurl')) {
-        invoice = await decodeAndFetchLnUrl(destination);
-      } else if (destination.includes('@')) {
-        if (!amount || Number(amount) <= 0) {
-          throw new Error('amountSats required for Lightning address payments');
-        }
-        invoice = await resolveLightningAddress(destination, Number(amount));
+    if (destination.includes('@')) {
+      console.log('Resolving Lightning address:', destination);
+      invoice = await resolveLightningAddress(destination, Number(amount), currency);
+      console.log('Resolved invoice:', invoice);
+      if (!invoice || !invoice.startsWith('ln')) {
+        throw new Error('Invalid or malformed invoice retrieved');
+      }
+    } else {
+      invoice = destination;
+      if (!invoice.startsWith('ln')) {
+        throw new Error('Invalid invoice format: must start with "ln"');
       }
     }
 
-    if (!invoice || typeof invoice !== 'string' || !invoice.toLowerCase().startsWith('ln')) {
-      throw new Error('Invalid or malformed invoice');
-    }
-
-    const paymentPayload = { payment_request: invoice };
+    // Log the request details for debugging
+    const paymentPayload = {
+      payment_request: invoice
+    };
+    
+    console.log('Sending payment request to Speed API:', {
+      url: `${SPEED_API_BASE}/payments`,
+      payload: paymentPayload,
+      headers: {
+        Authorization: `Basic ${AUTH_HEADER}`,
+        'Content-Type': 'application/json',
+        'speed-version': '2022-04-15',
+      }
+    });
 
     const response = await httpClient.post(
       `${SPEED_API_BASE}/payments`,
@@ -420,7 +454,7 @@ async function sendPayment(destination, amount, note = '') {
           'Content-Type': 'application/json',
           'speed-version': '2022-04-15',
         },
-        timeout: 10000,
+        timeout: 5000,
       }
     );
 
@@ -428,14 +462,8 @@ async function sendPayment(destination, amount, note = '') {
     return response.data;
   } catch (error) {
     const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-    const errorStatus = error.response?.status || 'No status';
-    const errorDetails = error.response?.data || error.message;
-    console.error('Send Payment Error:', {
-      message: errorMessage,
-      status: errorStatus,
-      details: errorDetails,
-    });
-    throw new Error(`Failed to send payment: ${errorMessage} (Status: ${errorStatus})`);
+    console.error('Send Payment Error:', errorMessage);
+    throw new Error(`Failed to send payment: ${errorMessage}`);
   }
 }
 
@@ -468,8 +496,13 @@ async function decodeAndFetchLnUrl(lnUrl) {
   }
 }
 
-// Send instant payment using Speed wallet API - Sea Battle implementation
+// New Speed Wallet instant send function using the instant-send API - Sea Battle exact implementation
 async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', targetCurrency = 'SATS', note = '') {
+
+  /*
+  Placeholder for sending payments logic
+  Integrate actual sending logic here
+  */
   try {
     console.log('Sending instant payment via Speed Wallet instant-send API:', {
       withdrawRequest,
@@ -504,15 +537,6 @@ async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', tar
     );
 
     console.log('Instant send response:', response.data);
-    transactionLogger.info({
-      event: 'payment_sent',
-      recipient: withdrawRequest,
-      amount: amount,
-      currency: currency,
-      targetCurrency: targetCurrency,
-      note: note,
-      response: response.data
-    });
     return response.data;
   } catch (error) {
     const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
@@ -522,13 +546,6 @@ async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', tar
       message: errorMessage,
       status: errorStatus,
       details: errorDetails,
-    });
-    errorLogger.error({
-      event: 'payment_send_failed',
-      recipient: withdrawRequest,
-      amount: amount,
-      error: errorMessage,
-      status: errorStatus
     });
     throw new Error(`Failed to send instant payment: ${errorMessage} (Status: ${errorStatus})`);
   }
@@ -843,7 +860,8 @@ class Game {
   }
 }
 
-// Game management  
+// Game management
+const games = {};
 const waitingQueue = []; // Players waiting for match
 const botSpawnTimers = {}; // Track bot spawn timers
 
@@ -1019,28 +1037,169 @@ app.post('/api/generate-lnurl', async (req, res) => {
 app.post('/api/generate-qr', async (req, res) => {
   try {
     const { invoice } = req.body;
-    
     if (!invoice) {
       return res.status(400).json({ error: 'Invoice required' });
     }
-    
-    // Generate QR code as data URL
-    const qrCode = await QRCode.toDataURL(invoice, {
-      errorCorrectionLevel: 'M',
-      type: 'image/png',
-      quality: 0.92,
-      margin: 1,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      width: 256
-    });
-    
-    res.json({ qr: qrCode });
+    const qr = await QRCode.toDataURL(invoice);
+    res.json({ qr });
   } catch (error) {
-    console.error('Error generating QR code:', error.message);
+    console.error('QR generation error:', error);
     res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
+// New addictive features API endpoints
+
+// Achievements API
+app.get('/api/achievements/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const progress = achievementSystem.getPlayerProgress(lightningAddress);
+    res.json(progress);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get achievements' });
+  }
+});
+
+app.get('/api/achievements', (req, res) => {
+  try {
+    const achievements = achievementSystem.getAllAchievements();
+    res.json(achievements);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get achievement definitions' });
+  }
+});
+
+app.post('/api/achievements/claim/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const rewards = achievementSystem.claimRewards(lightningAddress);
+    res.json({ rewards });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to claim rewards' });
+  }
+});
+
+// Leaderboards API
+app.get('/api/leaderboards', (req, res) => {
+  try {
+    const { type = 'profit', period = 'all', limit = 50 } = req.query;
+    const leaderboard = globalLeaderboards.getLeaderboard(type, period, parseInt(limit));
+    res.json(leaderboard);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get leaderboard' });
+  }
+});
+
+app.get('/api/leaderboards/streaks', (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    const leaderboard = streakSystem.getStreakLeaderboard(parseInt(limit));
+    res.json(leaderboard);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get streak leaderboard' });
+  }
+});
+
+app.get('/api/player-stats/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const stats = globalLeaderboards.getPlayerStats(lightningAddress);
+    const streakData = streakSystem.getPlayerStreak(lightningAddress);
+    res.json({ ...stats, streak: streakData });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get player stats' });
+  }
+});
+
+
+// Mystery boxes API
+app.get('/api/mystery-boxes/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const boxes = mysteryBoxManager.getPlayerBoxes(lightningAddress);
+    res.json(boxes);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get mystery boxes' });
+  }
+});
+
+app.post('/api/mystery-boxes/open', (req, res) => {
+  try {
+    const { lightningAddress, boxId } = req.body;
+    const result = mysteryBoxManager.openMysteryBox(lightningAddress, boxId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to open mystery box' });
+  }
+});
+
+app.post('/api/mystery-boxes/daily/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const result = mysteryBoxManager.getDailyMysteryBox(lightningAddress);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get daily mystery box' });
+  }
+});
+
+app.get('/api/mystery-boxes/stats/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const stats = mysteryBoxManager.getBoxStats(lightningAddress);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get box stats' });
+  }
+});
+
+// Tournament API
+app.get('/api/tournaments', (req, res) => {
+  try {
+    const tournaments = tournamentManager.getActiveTournaments();
+    res.json(tournaments);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get tournaments' });
+  }
+});
+
+app.post('/api/tournaments/create', (req, res) => {
+  try {
+    const { mode = 'TOURNAMENT', entryFee = 500, maxPlayers = 16 } = req.body;
+    const tournament = tournamentManager.createTournament(mode, entryFee, maxPlayers);
+    res.json(tournament);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create tournament' });
+  }
+});
+
+app.post('/api/tournaments/join', (req, res) => {
+  try {
+    const { tournamentId, playerData } = req.body;
+    const result = tournamentManager.joinTournament(tournamentId, playerData);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to join tournament' });
+  }
+});
+
+app.get('/api/tournaments/:tournamentId', (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+    const tournament = tournamentManager.getTournament(tournamentId);
+    res.json(tournament || { error: 'Tournament not found' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get tournament' });
+  }
+});
+
+// Game modes API
+app.get('/api/game-modes', (req, res) => {
+  try {
+    res.json(Object.values(GAME_MODES));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get game modes' });
   }
 });
 
@@ -1084,76 +1243,12 @@ app.post('/api/verify-payment', async (req, res) => {
   }
 });
 
-// Speed Wallet Webhook - Complete Sea Battle implementation
-app.post('/webhook', (req, res) => {
+// Speed Wallet Webhook - Exact Sea Battle implementation (no signature verification)
+app.post('/webhook', express.json(), (req, res) => {
   logger.debug('Webhook received', { headers: req.headers });
-  // Verify webhook signature per Speed docs
-  try {
-    const webhookId = req.headers['webhook-id'];
-    const webhookTimestamp = req.headers['webhook-timestamp'];
-    const signatureHeader = req.headers['webhook-signature'];
-    if (!webhookId || !webhookTimestamp || !signatureHeader || !req.rawBody) {
-      logger.warn('Missing signature headers or raw body', {
-        hasId: !!webhookId, hasTs: !!webhookTimestamp, hasSig: !!signatureHeader, hasRaw: !!req.rawBody
-      });
-      return res.status(400).send('Missing signature headers');
-    }
-
-    const secretRaw = process.env.SPEED_WALLET_WEBHOOK_SECRET;
-    if (!secretRaw) {
-      logger.error('SPEED_WALLET_WEBHOOK_SECRET not configured');
-      return res.status(500).send('Server not configured');
-    }
-    const base64Part = secretRaw.startsWith('wsec_') ? secretRaw.slice(5) : secretRaw;
-    let secretBytes;
-    try {
-      secretBytes = Buffer.from(base64Part, 'base64');
-    } catch (e) {
-      logger.error('Invalid webhook secret format');
-      return res.status(500).send('Server not configured');
-    }
-
-    const signedPayload = `${webhookId}.${webhookTimestamp}.${req.rawBody}`;
-    const expectedSig = crypto
-      .createHmac('sha256', secretBytes)
-      .update(signedPayload, 'utf8')
-      .digest('base64');
-
-    // Signature header may contain multiple values and a version prefix (e.g., "v1,BASE64")
-    const candidates = String(signatureHeader)
-      .trim()
-      .split(/\s+/)
-      .map(s => {
-        if (s.includes(',')) return s.split(',')[1] || '';
-        if (s.includes('=')) return s.split('=')[1] || '';
-        return s;
-      })
-      .filter(Boolean);
-
-    const match = candidates.some(sig => {
-      const a = Buffer.from(expectedSig);
-      const b = Buffer.from(sig);
-      return a.length === b.length && crypto.timingSafeEqual(a, b);
-    });
-
-    if (!match) {
-      logger.warn('Invalid webhook signature', { webhookId, webhookTimestamp });
-      return res.status(400).send('Invalid signature');
-    }
-
-    // Idempotency: ignore duplicate webhook-id
-    if (processedWebhooks.has(webhookId)) {
-      logger.info('Duplicate webhook ignored', { webhookId });
-      return res.status(200).send('Duplicate');
-    }
-    processedWebhooks.add(webhookId);
-  } catch (e) {
-    logger.error('Webhook verification error', { error: e.message });
-    return res.status(400).send('Invalid signature');
-  }
-
+  const WEBHOOK_SECRET = process.env.SPEED_WALLET_WEBHOOK_SECRET || 'we_memya2mjjqpg1fjA';
   const event = req.body;
-  logger.info('Processing webhook event', { event: event.event_type, data: event.data });
+  logger.info('Processing webhook event', { event: event.event_type, data: event.data })
 
   try {
     const eventType = event.event_type;
@@ -1188,6 +1283,9 @@ app.post('/webhook', (req, res) => {
         };
         
         transactionLogger.info(paymentData);
+        
+        // Forward payment log to PC
+        logForwarder.logPayment(socketId, paymentData);
 
         if (sock) {
           sock.emit('paymentVerified');
@@ -1599,7 +1697,7 @@ function attemptMatchOrEnqueue(socketId) {
       waitingQueue.splice(stillWaiting, 1);
 
       const botId = `bot_${uuidv4()}`;
-      const botAddress = 'developer@tryspeed.com';
+      const botAddress = generateBotLightningAddress();
 
       const gameId = uuidv4();
       const game = new Game(gameId, player.betAmount);
@@ -2037,12 +2135,45 @@ function handleGameEnd(gameId, winnerId) {
     });
   }
   
-  // Track game history for human player
+  // Track game history for human player and update new systems
   const humanPlayer = winner?.isBot ? loser : winner;
   if (humanPlayer && !humanPlayer.isBot) {
     const playerWon = !winner?.isBot;
+    const gameResult = {
+      isWin: playerWon,
+      isLoss: !playerWon,
+      betAmount: game.betAmount,
+      winnings: playerWon ? PAYOUTS[game.betAmount]?.winner || 0 : 0,
+      gameDuration: Date.now() - game.createdAt,
+      opponentMoves: game.moveCount || 0,
+      isPerfectGame: playerWon && (game.moveCount <= 3),
+      isSpeedWin: playerWon && (Date.now() - game.createdAt) < 30000,
+      isComebackWin: false // TODO: implement comeback detection
+    };
+
+    // Update all new systems
+    const streakBonus = streakSystem.updateStreak(humanPlayer.lightningAddress, gameResult);
+    const playerStats = globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats);
+    const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, playerStats, gameResult);
+    const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, playerStats);
+
+    // Update legacy history
     updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, playerWon);
-    console.log(`Updated history for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats`);
+    console.log(`Updated all systems for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats, Streak bonus: ${streakBonus.sats} sats`);
+    
+    // Emit new achievements and rewards to player
+    const playerSocket = io.sockets.sockets.get(humanPlayer.socketId);
+    if (playerSocket) {
+      if (newAchievements.length > 0) {
+        playerSocket.emit('achievementsUnlocked', { achievements: newAchievements });
+      }
+      if (mysteryBoxes.length > 0) {
+        playerSocket.emit('mysteryBoxEarned', { boxes: mysteryBoxes });
+      }
+      if (streakBonus.sats > 0) {
+        playerSocket.emit('streakBonus', { bonus: streakBonus });
+      }
+    }
   }
   
   // Emit personalized result to each participant
@@ -2136,7 +2267,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start server (Render/Railway will set PORT)
-const PORT = process.env.PORT || process.env.BACKEND_PORT || 4000;
+const PORT = process.env.BACKEND_PORT || process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Speed Wallet API: ${SPEED_API_BASE}`);
