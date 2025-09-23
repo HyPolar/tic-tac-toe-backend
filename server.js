@@ -922,6 +922,48 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Check payment status (for local testing since webhooks don't work locally)
+app.get('/api/check-payment/:invoiceId', async (req, res) => {
+  try {
+    const { invoiceId } = req.params;
+    console.log('Checking payment status for invoice:', invoiceId);
+    
+    if (!invoiceId) {
+      return res.status(400).json({ success: false, error: 'Invoice ID is required' });
+    }
+
+    // Fetch invoice status from Speed API
+    const response = await axios.get(`${SPEED_API_BASE}/payments/${invoiceId}`, {
+      headers: {
+        'Authorization': `Basic ${AUTH_HEADER}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    const invoice = response.data;
+    console.log('Speed API invoice status:', { id: invoiceId, status: invoice.status });
+    
+    if (invoice.status === 'paid' || invoice.status === 'completed') {
+      // Manually trigger payment verification
+      handleInvoicePaid(invoiceId, { 
+        event_type: 'manual_verification',
+        data: { object: invoice }
+      });
+      return res.json({ success: true, status: invoice.status });
+    } else {
+      return res.json({ success: true, status: invoice.status });
+    }
+  } catch (error) {
+    console.error('Error checking payment status:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Failed to check payment status',
+      details: error.message 
+    });
+  }
+});
+
 // Resolve LN input (Lightning address, LNURL, or BOLT11) to a BOLT11 invoice
 app.post('/api/resolve-ln', async (req, res) => {
   try {
