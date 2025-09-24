@@ -1237,12 +1237,170 @@ app.get('/api/tournaments/:tournamentId', (req, res) => {
   }
 });
 
-// Game modes API
 app.get('/api/game-modes', (req, res) => {
   try {
     res.json(Object.values(GAME_MODES));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to get game modes' });
+    res.status(500).json({ error: 'Failed to fetch game modes' });
+  }
+});
+
+// Bot Management API
+const { botStats, playerHistory, betHistory, getBotDifficulty, BOT_DIFFICULTY } = require('./botLogic');
+
+// Get bot statistics
+app.get('/api/bots/stats', (req, res) => {
+  try {
+    const stats = botStats.getStats();
+    const activeBotsCount = activeBots.size;
+    const playerHistorySize = playerHistory.size;
+    const betHistorySize = betHistory.size;
+    
+    res.json({
+      ...stats,
+      activeBots: activeBotsCount,
+      trackedPlayers: playerHistorySize,
+      betHistoryRecords: betHistorySize,
+      difficultyLevels: BOT_DIFFICULTY
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch bot stats' });
+  }
+});
+
+// Get active bot games
+app.get('/api/bots/active', (req, res) => {
+  try {
+    const activeBotGames = [];
+    for (const [gameId, bot] of activeBots.entries()) {
+      const game = games[gameId];
+      if (game) {
+        activeBotGames.push({
+          gameId: gameId,
+          betAmount: bot.betAmount,
+          shouldWin: bot.shouldWin,
+          moveCount: bot.moveHistory.length,
+          gameStatus: game.status,
+          opponentAddress: bot.opponentAddress
+        });
+      }
+    }
+    res.json({ activeBotGames, totalActive: activeBotGames.length });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch active bot games' });
+  }
+});
+
+// Get player history for specific Lightning address
+app.get('/api/bots/player-history/:lightningAddress', (req, res) => {
+  try {
+    const { lightningAddress } = req.params;
+    const history = playerHistory.get(lightningAddress);
+    const betInfo = betHistory.get(lightningAddress);
+    
+    if (!history && !betInfo) {
+      return res.status(404).json({ error: 'Player not found in bot history' });
+    }
+    
+    res.json({
+      lightningAddress,
+      gameHistory: history || null,
+      betHistory: betInfo || null,
+      recommendedDifficulty: history ? getBotDifficulty(50, history) : BOT_DIFFICULTY.EASY
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch player history' });
+  }
+});
+
+// Reset bot statistics (admin only)
+app.post('/api/bots/reset-stats', (req, res) => {
+  try {
+    // Reset bot stats
+    botStats.totalGames = 0;
+    botStats.totalWins = 0;
+    botStats.totalLosses = 0;
+    botStats.totalDraws = 0;
+    botStats.averageThinkTime = 0;
+    botStats.betAmountDistribution.clear();
+    
+    // Clear player and bet history
+    playerHistory.clear();
+    betHistory.clear();
+    
+    res.json({ success: true, message: 'Bot statistics reset successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to reset bot statistics' });
+  }
+});
+
+// Force bot spawn for testing
+app.post('/api/bots/force-spawn', (req, res) => {
+  try {
+    const { betAmount = 50, playerAddress = 'test@speed.app' } = req.body;
+    
+    // Create a test game with bot
+    const gameId = `test_${Date.now()}`;
+    const botId = `bot_${uuidv4()}`;
+    const botAddress = generateBotLightningAddress();
+    const bot = new BotPlayer(gameId, betAmount, playerAddress);
+    
+    activeBots.set(gameId, bot);
+    
+    res.json({
+      success: true,
+      gameId,
+      botId,
+      botAddress,
+      botShouldWin: bot.shouldWin,
+      betAmount: bot.betAmount,
+      message: 'Bot spawned successfully for testing'
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to spawn test bot' });
+  }
+});
+
+// Get bot patterns and logic info
+app.get('/api/bots/patterns', (req, res) => {
+  try {
+    const { PATTERN_50_SATS, PATTERN_300_PLUS } = require('./botLogic');
+    
+    res.json({
+      patterns: {
+        '50_sats': {
+          pattern: PATTERN_50_SATS,
+          description: 'Pattern: W-L-W-W-L-L-L-W-L (repeats) - Player wins first game, balanced gameplay'
+        },
+        '300_plus': {
+          pattern: PATTERN_300_PLUS,
+          description: 'Pattern: L-W-L-W-L-L-W-L-W (repeats) - Player loses first, wins on EXACT same bet retry',
+          revengeLogic: 'Player wins 2nd game ONLY if same Lightning address + same bet amount after loss'
+        }
+      },
+      gameRules: {
+        turnTimers: {
+          firstTurn: '8 seconds',
+          subsequentTurns: '5 seconds',
+          drawTurns: '5 seconds (opponent goes first after draw)'
+        },
+        drawLogic: {
+          fairGames: 'Bot loses after 2-5 draws with silly mistake',
+          cheatingGames: 'Bot wins after 3-4 draws with strategic play',
+          afterDraw: 'Opponent gets first turn (5 seconds only)'
+        }
+      },
+      difficultyInfo: {
+        [BOT_DIFFICULTY.EASY]: 'Noob play with many mistakes (~30% win rate)',
+        [BOT_DIFFICULTY.MEDIUM]: 'Balanced strategic play (~50% win rate)',
+        [BOT_DIFFICULTY.HARD]: 'Smart strategic play with tension (~70% win rate)',
+        [BOT_DIFFICULTY.EXPERT]: 'Near perfect play with full competition (~85% win rate)'
+      },
+      spawnDelay: '13-25 seconds random delay when no human opponent found',
+      thinkingTime: '2-5 seconds human-like thinking time'
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch bot patterns' });
   }
 });
 
@@ -1385,6 +1543,15 @@ app.post('/webhook', express.json(), (req, res) => {
           const playerIds = Object.keys(game.players);
           const startsIn = 5;
           const startAt = Date.now() + startsIn * 1000;
+          
+          // Clear bot spawn timers for both players since they found human opponents
+          playerIds.forEach(pid => {
+            if (botSpawnTimers[pid]) {
+              clearTimeout(botSpawnTimers[pid]);
+              delete botSpawnTimers[pid];
+              console.log(`Cleared bot spawn timer for player ${pid} - found human opponent`);
+            }
+          });
           
           // Notify both players
           playerIds.forEach(pid => {
@@ -1724,20 +1891,27 @@ function attemptMatchOrEnqueue(socketId) {
     if (!waitingQueue.find(p => p.socketId === socketId)) {
       waitingQueue.push({ socketId, lightningAddress: player.lightningAddress, betAmount: player.betAmount });
     }
-    const delay = BOT_SPAWN_DELAY.min + Math.random() * (BOT_SPAWN_DELAY.max - BOT_SPAWN_DELAY.min);
+    const delay = getRandomBotSpawnDelay();
     const spawnAt = Date.now() + delay;
     const estWaitSeconds = Math.floor(delay / 1000);
     sock?.emit('waitingForOpponent', {
-      minWait: Math.floor(BOT_SPAWN_DELAY.min / 1000),
-      maxWait: Math.floor(BOT_SPAWN_DELAY.max / 1000),
+      minWait: 13, // 13 seconds minimum
+      maxWait: 25, // 25 seconds maximum
       estWaitSeconds,
       spawnAt
     });
 
+    console.log(`Scheduling bot spawn for player ${socketId} in ${estWaitSeconds} seconds`);
+    
     botSpawnTimers[socketId] = setTimeout(() => {
+      console.log(`Bot spawn timer triggered for player ${socketId}`);
       const stillWaiting = waitingQueue.findIndex(p => p.socketId === socketId);
-      if (stillWaiting === -1) return;
+      if (stillWaiting === -1) {
+        console.log(`Player ${socketId} no longer waiting - bot spawn cancelled`);
+        return;
+      }
       waitingQueue.splice(stillWaiting, 1);
+      console.log(`Spawning bot opponent for player ${socketId}`);
 
       const botId = `bot_${uuidv4()}`;
       const botAddress = generateBotLightningAddress();
@@ -1849,7 +2023,7 @@ function handleGameEnd(gameId, winnerId) {
   game.status = 'finished';
   game.clearTurnTimer();
   
-  // Clean up bot
+  // Clean up bot and record statistics
   const bot = activeBots.get(gameId);
   if (bot) {
     // Update player history if human player
@@ -1857,7 +2031,22 @@ function handleGameEnd(gameId, winnerId) {
     if (humanId) {
       const humanPlayer = game.players[humanId];
       const playerWon = winnerId === humanId;
+      const botWon = !playerWon && winnerId && game.players[winnerId]?.isBot;
+      const isDraw = !winnerId;
+      
+      // Record game result for bot learning
       bot.recordGameResult(playerWon);
+      
+      // Record bot statistics
+      let result;
+      if (isDraw) result = 'draw';
+      else if (botWon) result = 'win';
+      else result = 'loss';
+      
+      botStats.recordGame(result, bot.betAmount, bot.thinkingTime);
+      
+      // Log bot game completion
+      console.log(`Bot game completed: ${gameId}, Result: ${result}, Bet: ${bot.betAmount} SATS, Human: ${humanPlayer.lightningAddress}`);
     }
     activeBots.delete(gameId);
   }
