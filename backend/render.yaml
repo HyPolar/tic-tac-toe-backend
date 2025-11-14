@@ -3,11 +3,44 @@ services:
     name: tic-tac-toe-backend
     env: node
     rootDir: .
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: npm install && npm install -g pm2
+    startCommand: npm run pm2:start
     healthCheckPath: /health
     autoDeploy: true
+    
+    # Enhanced deployment settings for maximum uptime
+    region: oregon
+    plan: starter
+    
+    # Resource allocation
+    disk: 1024
+    
+    # Auto-scaling and health monitoring
+    healthCheckGracePeriod: 60s
+    healthCheckInterval: 30s
+    healthCheckTimeout: 10s
+    healthCheckThreshold: 3
+    
+    # Environment variables
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: NODE_ENV
+        value: production
+      - key: PM2_PUBLIC_KEY
+        sync: false
+      - key: PM2_SECRET_KEY
+        sync: false
+    
+    # Build settings
+    buildFilter:
+      paths:
+      - server.js
+      - package.json
+      - ecosystem.config.js
+      - backend/**
+      
+    # Auto-restart policies
+    preDeployCommand: pm2 delete all || true
+    postDeployCommand: pm2 save
 

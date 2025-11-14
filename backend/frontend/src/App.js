@@ -7,7 +7,11 @@ import StartScreen from './components/StartScreen';
 import PaymentScreen from './components/PaymentScreen';
 import WaitingScreen from './components/WaitingScreen';
 import GameScreen from './components/GameScreen';
+import AchievementSystem from './components/AchievementSystem';
+import MysteryBoxes from './components/MysteryBoxes';
+import LeaderboardSystem from './components/LeaderboardSystem';
 import './styles.css';
+import './components/NewFeatures.css';
 const PAYOUTS = {
   50: { winner: 80 },
   300: { winner: 500 },
@@ -39,15 +43,14 @@ export default function App() {
   const [lnurl, setLnurl] = useState('');
   const [addressLocked, setAddressLocked] = useState(false);
 
-  // Payment state - Sea Battle implementation
-  const [paymentInfo, setPaymentInfo] = useState(null); // { invoiceId, lightningInvoice, hostedInvoiceUrl, amountSats, amountUSD, speedInterfaceUrl }
+  // Payment state
+  const [paymentInfo, setPaymentInfo] = useState(null); // { invoiceId, lightningInvoice, hostedInvoiceUrl, amountSats, amountUSD }
   const [isWaitingForPayment, setIsWaitingForPayment] = useState(false);
-  const [paymentTimer, setPaymentTimer] = useState(300); // 5 minutes like Sea Battle
-  const paymentTimerRef = useRef(null);
 
   // Game state
   const [gameId, setGameId] = useState(null);
   const [symbol, setSymbol] = useState(null); // 'X' | 'O'
+  const [opponent, setOpponent] = useState(null); // opponent info
   const [turn, setTurn] = useState(null); // socketId whose turn
   const [board, setBoard] = useState(Array(9).fill(null));
   const [message, setMessage] = useState('');
@@ -63,7 +66,7 @@ export default function App() {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('ttt_theme');
-    return saved && saved !== 'neon' ? saved : 'simple';
+    return saved || 'blue'; // Default to blue theme instead of simple (green)
   });
   const [turnDuration, setTurnDuration] = useState(null); // seconds for current turn
   const confettiRef = useRef(null);
@@ -75,6 +78,12 @@ export default function App() {
   const audioCtxRef = useRef(null);
   const touchStartRef = useRef(null);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+
+  // Calculate turn progress for timer visualization
+  const turnProgress = useMemo(() => {
+    if (!turnDuration || !timeLeft) return 0;
+    return ((turnDuration - timeLeft) / turnDuration) * 100;
+  }, [turnDuration, timeLeft]);
   const [waitingInfo, setWaitingInfo] = useState(null); // { minWait, maxWait, estWaitSeconds, spawnAt }
   const waitingIntervalRef = useRef(null);
   const [waitingSecondsLeft, setWaitingSecondsLeft] = useState(null);
@@ -82,6 +91,14 @@ export default function App() {
   const matchIntervalRef = useRef(null);
   const [matchSecondsLeft, setMatchSecondsLeft] = useState(null);
 
+  // New addictive features state
+  const [showAchievements, setShowAchievements] = useState(false);
+  const [showMysteryBoxes, setShowMysteryBoxes] = useState(false);
+  const [showLeaderboards, setShowLeaderboards] = useState(false);
+  const [playerSats, setPlayerSats] = useState(0);
+  const [newAchievement, setNewAchievement] = useState(null);
+  const [newMysteryBox, setNewMysteryBox] = useState(null);
+  const [streakBonus, setStreakBonus] = useState(0);
 
   // History
   const [history, setHistory] = useState(() => {
@@ -121,34 +138,56 @@ export default function App() {
         const msg = typeof payload === 'string' ? payload : (payload?.message || 'Error');
         setMessage(msg);
       },
-      paymentRequest: ({ lightningInvoice, hostedInvoiceUrl, speedInterfaceUrl, amountSats, amountUSD, invoiceId }) => {
-        // Payment request received - Sea Battle implementation
-        setPaymentInfo({ 
-          amountUSD, 
-          amountSats,
-          invoiceId,
-          speedInterfaceUrl: speedInterfaceUrl || hostedInvoiceUrl // Use speedInterfaceUrl or fallback to hostedInvoiceUrl
-        });
+      paymentRequest: async ({ lightningInvoice, hostedInvoiceUrl, amountSats, amountUSD, invoiceId, speedInterfaceUrl }) => {
+        const data = { lightningInvoice, hostedInvoiceUrl, amountSats, amountUSD, invoiceId, speedInterfaceUrl };
+        setPaymentInfo(data);
         setLnurl(lightningInvoice || hostedInvoiceUrl);
-        setIsWaitingForPayment(true);
-        setPaymentTimer(300); // Reset to 5 minutes like Sea Battle
+        setQrCode('');
         setMessage(`Pay ${amountSats} SATS (~$${amountUSD})`);
         setGameState('awaitingPayment');
         setCurrentScreen('payment');
-        
-        // Generate QR code
+        setIsWaitingForPayment(true);
+
+        // Generate QR code for Lightning invoice
         if (lightningInvoice) {
-          fetch(`${BACKEND_URL}/api/generate-qr`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ invoice: lightningInvoice })
-          })
-          .then(res => res.json())
-          .then(data => {
-            if (data.qr) setQrCode(data.qr);
-          })
-          .catch(err => console.error('QR generation error:', err));
+          try {
+            const response = await fetch(`${BACKEND_URL}/api/generate-qr`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ invoice: lightningInvoice })
+            });
+            const qrData = await response.json();
+            if (qrData.qr) {
+              setQrCode(qrData.qr);
+            }
+          } catch (error) {
+            console.error('Failed to generate QR code:', error);
+          }
         }
+
+        // Store Speed interface URL if available
+        if (speedInterfaceUrl) {
+          localStorage.setItem('speedInterfaceUrl', speedInterfaceUrl);
+        }
+
+        // Start polling payment status for local testing (since webhooks don't work locally)
+        const pollInterval = setInterval(async () => {
+          try {
+            const response = await fetch(`${BACKEND_URL}/api/check-payment/${invoiceId}`);
+            const result = await response.json();
+            if (result.success && result.status === 'paid') {
+              clearInterval(pollInterval);
+              // Payment verified - this will trigger the paymentVerified socket event from backend
+            }
+          } catch (error) {
+            console.error('Payment polling error:', error);
+          }
+        }, 3000); // Check every 3 seconds
+
+        // Stop polling after 10 minutes
+        setTimeout(() => {
+          clearInterval(pollInterval);
+        }, 600000);
       },
       payment_sent: ({ amount, status, txId }) => {
         setMessage(`Payout sent: ${amount} SATS${txId ? ` (tx: ${txId})` : ''}`);
@@ -157,10 +196,8 @@ export default function App() {
         setMessage(`Payout error: ${error || 'Unknown error'}`);
       },
       paymentVerified: () => {
-        // Payment verified - Sea Battle implementation
         setIsWaitingForPayment(false);
-        setPaymentInfo(null);
-        setMessage('Payment verified! Preparing game...');
+        setMessage('Payment verified! Waiting for opponent...');
         setGameState('waiting');
         setCurrentScreen('waiting');
       },
@@ -197,43 +234,40 @@ export default function App() {
         setCurrentScreen('waiting');
         setMessage(message || 'Finding opponent...');
         
-        // Parse estimated wait time (e.g., "13-25 seconds")
-        if (estimatedWait) {
-          const match = estimatedWait.match(/(\d+)-(\d+)/);
-          if (match) {
-            const minWait = parseInt(match[1]);
-            const maxWait = parseInt(match[2]);
-            setWaitingInfo({ minWait, maxWait, estimatedWait });
-            // Start countdown from max wait time
-            setWaitingSecondsLeft(maxWait);
-            
-            if (waitingIntervalRef.current) { 
-              clearInterval(waitingIntervalRef.current); 
-            }
-            
-            const startTime = Date.now();
-            waitingIntervalRef.current = setInterval(() => {
-              const elapsed = Math.floor((Date.now() - startTime) / 1000);
-              const remaining = Math.max(0, maxWait - elapsed);
-              setWaitingSecondsLeft(remaining);
-            }, 1000);
-          }
-        } else {
-          setWaitingInfo(null);
-          setWaitingSecondsLeft(null);
+        // Set estimated wait time: 13-25 seconds
+        const minWait = 13;
+        const maxWait = 25;
+        setWaitingInfo({ minWait, maxWait, estimatedWait: '13-25 seconds' });
+        // Start countdown from max wait time
+        setWaitingSecondsLeft(maxWait);
+        
+        if (waitingIntervalRef.current) { 
+          clearInterval(waitingIntervalRef.current); 
         }
+        
+        const startTime = Date.now();
+        waitingIntervalRef.current = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startTime) / 1000);
+          const remaining = Math.max(0, maxWait - elapsed);
+          setWaitingSecondsLeft(remaining);
+        }, 1000);
+        
         setMatchInfo(null);
       },
       matchFound: ({ opponent, startsIn, startAt }) => {
-        // Switch to pre-game countdown
+        // Switch to pre-game countdown: "Opponent found, starting in 5..."
         if (waitingIntervalRef.current) { clearInterval(waitingIntervalRef.current); waitingIntervalRef.current = null; }
         setWaitingInfo(null);
-        setMatchInfo({ opponent, startsIn, startAt });
+        const countdownStart = Date.now() + 5000;
+        setMatchInfo({ opponent, startsIn: 5, startAt: countdownStart });
         setGameState('waiting');
-        setMessage('Opponent found! Starting soon...');
-        if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); matchIntervalRef.current = null; }
+        setMessage('Opponent found! Starting game in...');
+        
+        // Start countdown from 5
+        setMatchSecondsLeft(5);
+        if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); }
         const tick = () => {
-          const secs = Math.max(0, Math.ceil((Number(startAt) - Date.now()) / 1000));
+          const secs = Math.max(0, Math.ceil((countdownStart - Date.now()) / 1000));
           setMatchSecondsLeft(secs);
           // Clear interval when countdown reaches 0
           if (secs <= 0 && matchIntervalRef.current) {
@@ -408,37 +442,33 @@ export default function App() {
     setAddressLocked(true);
   };
 
-  // Autofill Lightning username from URL (#p_add=user@speed.app or ?p_add=)
+  // Auto-fetch Lightning address from Speed Wallet URL params
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    
+    // Speed Wallet passes p_add (Lightning address) or acct_id
     const pAdd = urlParams.get('p_add') || hashParams.get('p_add');
+    const acctId = urlParams.get('acct_id') || hashParams.get('acct_id');
+    const authToken = urlParams.get('auth_token') || hashParams.get('auth_token');
+    
+    // If Lightning address is provided directly, use it
     if (pAdd && !lightningAddress) {
       setLightningAddress(pAdd);
+      setAddressLocked(true);
+      console.log('Auto-filled Lightning address from URL:', pAdd);
     }
-  }, [lightningAddress]);
-
-  // Payment timer - Sea Battle implementation
-  useEffect(() => {
-    if (isWaitingForPayment && paymentTimer > 0) {
-      paymentTimerRef.current = setTimeout(() => {
-        setPaymentTimer(paymentTimer - 1);
-      }, 1000);
-    } else if (isWaitingForPayment && paymentTimer === 0) {
-      console.log('Payment timed out after 5 minutes');
-      setIsWaitingForPayment(false);
-      setPaymentInfo(null);
-      setMessage('Payment timed out after 5 minutes. Click Retry to try again.');
-      setGameState('splash');
-      setCurrentScreen('start');
-      socket?.emit('cancelGame', { gameId });
-    }
-    return () => {
-      if (paymentTimerRef.current) {
-        clearTimeout(paymentTimerRef.current);
+    
+    // If acct_id or auth_token provided, fetch Lightning address from backend
+    if ((acctId || authToken) && !lightningAddress && socket && connected) {
+      if (acctId) {
+        setAcctId(acctId);
       }
-    };
-  }, [isWaitingForPayment, paymentTimer, gameId, socket]);
+      if (authToken) {
+        socket.emit('set_auth_token', { authToken });
+      }
+    }
+  }, [lightningAddress, socket, connected]);
 
   // Game timer for turn countdown
   useEffect(() => {
@@ -516,6 +546,158 @@ export default function App() {
       confettiRef.current.appendChild(confetti);
       setTimeout(() => confetti.remove(), 5000);
     }
+  };
+
+  // Handle cell click in game
+  const onCellClick = (index) => {
+    if (!socket || !connected) {
+      setMessage('Not connected to server');
+      return;
+    }
+    
+    if (gameState !== 'playing') {
+      setMessage('Game not active');
+      return;
+    }
+    
+    if (turn !== socketId) {
+      setMessage('Not your turn');
+      return;
+    }
+    
+    if (board[index] !== null) {
+      setMessage('Cell already taken');
+      return;
+    }
+    
+    // Play sound and haptics
+    sfxPlay('click');
+    triggerHaptic([10]);
+    
+    // Send move to server
+    socket.emit('makeMove', { gameId, position: index });
+  };
+
+  // Handle game resignation
+  const doResign = () => {
+    if (!socket || !connected) {
+      setMessage('Not connected to server');
+      return;
+    }
+    
+    if (gameState !== 'playing') {
+      setMessage('No active game to resign from');
+      return;
+    }
+    
+    if (confirm('Are you sure you want to resign? You will lose the game.')) {
+      socket.emit('resignGame', { gameId });
+      setMessage('You resigned from the game');
+    }
+  };
+
+  // Share game result
+  const shareResult = () => {
+    if (!gameId) return;
+    
+    const resultText = message.includes('You win') ? 'won' : message.includes('draw') ? 'drew' : 'lost';
+    const shareText = `I just ${resultText} a Lightning Network Tic-Tac-Toe game! ⚡️🎮`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Lightning Tic-Tac-Toe Result',
+        text: shareText,
+        url: window.location.href
+      }).catch(err => console.log('Share failed:', err));
+    } else {
+      // Fallback - copy to clipboard
+      navigator.clipboard.writeText(shareText + ' ' + window.location.href)
+        .then(() => setMessage('Result copied to clipboard!'))
+        .catch(() => setMessage('Share failed'));
+    }
+  };
+
+  // Handle board pointer movement for 3D tilt effect
+  const handleBoardPointer = (e) => {
+    if (!tiltEnabled || !boardRef.current) return;
+    
+    const rect = boardRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    const deltaX = (e.clientX - centerX) / (rect.width / 2);
+    const deltaY = (e.clientY - centerY) / (rect.height / 2);
+    
+    const rotateX = deltaY * 10; // Max 10 degrees
+    const rotateY = deltaX * 10;
+    
+    boardRef.current.style.transform = `perspective(1000px) rotateX(${-rotateX}deg) rotateY(${rotateY}deg)`;
+  };
+
+  // Reset board tilt
+  const resetBoardTilt = () => {
+    if (!boardRef.current) return;
+    boardRef.current.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg)';
+  };
+
+  // Copy payment invoice to clipboard
+  const copyPayment = () => {
+    if (!paymentInfo?.lightningInvoice) {
+      alert('No invoice available to copy');
+      return;
+    }
+    
+    try {
+      navigator.clipboard.writeText(paymentInfo.lightningInvoice).then(() => {
+        alert('Invoice copied to clipboard!');
+      }).catch(err => {
+        console.error('Failed to copy invoice:', err);
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = paymentInfo.lightningInvoice;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        alert('Invoice copied to clipboard!');
+      });
+    } catch (err) {
+      console.error('Copy failed:', err);
+      alert('Failed to copy invoice. Please copy manually.');
+    }
+  };
+
+  // Reset to menu and clean up game state
+  const resetToMenu = () => {
+    setCurrentScreen('menu');
+    setGameState('menu');
+    setPaymentInfo(null);
+    setIsWaitingForPayment(false);
+    setBoard(Array(9).fill(null));
+    setSymbol(null);
+    setOpponent(null);
+    setTurn(null);
+    setWinningLine(null);
+    setTurnDeadline(null);
+    setTimeLeft(null);
+    setMessage('');
+    setQrCode('');
+    setLnurl('');
+    
+    // Clear any intervals
+    if (waitingIntervalRef.current) {
+      clearInterval(waitingIntervalRef.current);
+      waitingIntervalRef.current = null;
+    }
+    if (matchIntervalRef.current) {
+      clearInterval(matchIntervalRef.current);
+      matchIntervalRef.current = null;
+    }
+    
+    setWaitingInfo(null);
+    setWaitingSecondsLeft(null);
+    setMatchInfo(null);
+    setMatchSecondsLeft(null);
   };
 
   return (
@@ -658,6 +840,7 @@ export default function App() {
           onOpenPrivacy={() => setShowPrivacy(true)}
           addressLocked={addressLocked}
           noticeMessage={message}
+          onBack={() => setCurrentScreen('menu')}
         />
       )}
 
@@ -668,7 +851,6 @@ export default function App() {
           onCopyPayment={copyPayment}
           onCancel={resetToMenu}
           qrCode={qrCode}
-          paymentTimer={paymentTimer}
         />
       )}
 
@@ -759,7 +941,73 @@ export default function App() {
       )}
       <div ref={confettiRef} className="confetti-layer" />
 
+      {/* Achievement Notification */}
+      {newAchievement && (
+        <div className="achievement-notification">
+          <div className="achievement-content">
+            <span className="achievement-icon">🏆</span>
+            <div className="achievement-text">
+              <h4>Achievement Unlocked!</h4>
+              <p>{newAchievement.achievement.name}</p>
+              <span className="reward">+{newAchievement.reward} sats</span>
+            </div>
+          </div>
+        </div>
+      )}
 
+      {/* Mystery Box Notification */}
+      {newMysteryBox && (
+        <div className="mysterybox-notification">
+          <div className="mysterybox-content">
+            <span className="mysterybox-icon">🎁</span>
+            <div className="mysterybox-text">
+              <h4>Mystery Box Earned!</h4>
+              <p>{newMysteryBox.boxType} Box</p>
+              <span className="reason">{newMysteryBox.reason}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Streak Bonus Notification */}
+      {streakBonus > 0 && (
+        <div className="streak-notification">
+          <div className="streak-content">
+            <span className="streak-icon">🔥</span>
+            <div className="streak-text">
+              <h4>Streak Bonus!</h4>
+              <p>+{streakBonus} sats bonus</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feature Modals */}
+      {showAchievements && (
+        <AchievementSystem 
+          lightningAddress={lightningAddress}
+          isOpen={showAchievements}
+          onClose={() => setShowAchievements(false)}
+          socket={socket}
+        />
+      )}
+      
+      {showMysteryBoxes && (
+        <MysteryBoxes 
+          lightningAddress={lightningAddress}
+          isOpen={showMysteryBoxes}
+          onClose={() => setShowMysteryBoxes(false)}
+          socket={socket}
+        />
+      )}
+      
+      {showLeaderboards && (
+        <LeaderboardSystem 
+          lightningAddress={lightningAddress}
+          isOpen={showLeaderboards}
+          onClose={() => setShowLeaderboards(false)}
+        />
+      )}
 
       {showSettings && (
         <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
@@ -871,9 +1119,10 @@ export default function App() {
                       <li><strong>Objective:</strong> Get 3 in a row (horizontal, vertical, or diagonal) - kindergarten rules apply</li>
                       <li><strong>First Move:</strong> 8 seconds to think (use them wisely)</li>
                       <li><strong>Subsequent Moves:</strong> 5 seconds each (no pressure, just your money on the line)</li>
+                      <li><strong>Draw Handling:</strong> If game draws, opponent gets first turn in next game (5 seconds only)</li>
                       <li><strong>Timeout:</strong> Take too long = you forfeit your turn (tough love)</li>
                       <li><strong>Winning:</strong> Three in a row = victory dance time 🕺💃</li>
-                      <li><strong>Draw:</strong> Nobody wins = awkward silence</li>
+                      <li><strong>Draw:</strong> Nobody wins = game continues with opponent going first</li>
                     </ul>
                   </div>
                 </div>
@@ -1042,7 +1291,8 @@ export default function App() {
                   <li><strong>Game Type:</strong> Standard 3x3 Tic-Tac-Toe with monetary wagers using Bitcoin Lightning Network.</li>
                   <li><strong>Turn Timers:</strong> First move: 8 seconds maximum. Subsequent moves: 5 seconds maximum. Exceeding time limits forfeits your turn.</li>
                   <li><strong>Winning Conditions:</strong> First player to achieve three marks in a row (horizontal, vertical, or diagonal) wins.</li>
-                  <li><strong>Draw Games:</strong> If the board is full without a winner, the game is a draw and wagers are returned (minus any network fees).</li>
+                  <li><strong>Draw Games:</strong> If the board is full without a winner, the game is a draw and wagers are returned (minus any network fees). After a draw, opponent gets first turn in next game.</li>
+                  <li><strong>Draw Turn Priority:</strong> After any draw game, the opponent gets the first turn with 5 seconds (not 8 seconds).</li>
                   <li><strong>Game Integrity:</strong> All moves are recorded with timestamps. Games cannot be reversed once completed.</li>
                 </ul>
               </div>
@@ -1491,8 +1741,74 @@ export default function App() {
           </div>
         )}
 
+      {/* New Feature Modals */}
+      {showAchievements && (
+        <AchievementSystem 
+          isOpen={showAchievements} 
+          onClose={() => setShowAchievements(false)}
+          lightningAddress={lightningAddress}
+          socket={socket}
+        />
+      )}
+
+      {showMysteryBoxes && (
+        <MysteryBoxes 
+          isOpen={showMysteryBoxes} 
+          onClose={() => setShowMysteryBoxes(false)}
+          lightningAddress={lightningAddress}
+          socket={socket}
+        />
+      )}
+
+      {showLeaderboards && (
+        <LeaderboardSystem 
+          isOpen={showLeaderboards} 
+          onClose={() => setShowLeaderboards(false)}
+          lightningAddress={lightningAddress}
+          socket={socket}
+        />
+      )}
 
 
+      {/* Notifications */}
+      {newAchievement && (
+        <div className="achievement-notification">
+          <div className="achievement-content">
+            <div className="achievement-icon">🏆</div>
+            <div className="achievement-text">
+              <h4>Achievement Unlocked!</h4>
+              <p>{newAchievement.name}</p>
+              <p className="reward">+{newAchievement.reward} sats</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {newMysteryBox && (
+        <div className="mysterybox-notification">
+          <div className="mysterybox-content">
+            <div className="mysterybox-icon">🎁</div>
+            <div className="mysterybox-text">
+              <h4>Mystery Box Received!</h4>
+              <p>{newMysteryBox.boxType} Box</p>
+              <p className="reason">{newMysteryBox.reason}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {streakBonus && (
+        <div className="streak-notification">
+          <div className="streak-content">
+            <div className="streak-icon">🔥</div>
+            <div className="streak-text">
+              <h4>Streak Bonus!</h4>
+              <p>Win streak: {streakBonus.streak}</p>
+              <p className="reward">+{streakBonus.bonus} sats bonus</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div ref={confettiRef} className="confetti-container"></div>
     </div>

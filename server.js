@@ -1808,6 +1808,7 @@ app.post('/webhook', express.json(), (req, res) => {
                     gameId: game.id,
                     symbol: game.players[pid].symbol,
                     turn: game.turn,
+                    board: game.board,
                     message: game.turn === pid ? 'Your move' : "Opponent's move",
                     turnDeadline
                   });
@@ -1897,6 +1898,7 @@ app.post('/webhook', express.json(), (req, res) => {
                           gameId: currentGame.id,
                           symbol: currentGame.players[pid].symbol,
                           turn: currentGame.turn,
+                          board: currentGame.board,
                           message: currentGame.turn === pid ? 'Your move' : "Opponent's move",
                           turnDeadline
                         });
@@ -1907,9 +1909,13 @@ app.post('/webhook', express.json(), (req, res) => {
                     }
                   });
                   
-                  // If bot starts, make first move
+                  // If bot starts, make first move after a short delay to ensure frontend is ready
                   if (currentGame.players[currentGame.turn]?.isBot) {
-                    makeBotMove(currentGame.id, currentGame.turn);
+                    setTimeout(() => {
+                      if (games[currentGame.id] && games[currentGame.id].status === 'playing') {
+                        makeBotMove(currentGame.id, currentGame.turn);
+                      }
+                    }, 500); // Small delay to ensure frontend received startGame
                   }
                   
                   gameLogger.info({
@@ -2103,6 +2109,7 @@ function attemptMatchOrEnqueue(socketId) {
           gameId: game.id,
           symbol: game.players[pid].symbol,
           turn: game.turn,
+          board: game.board,
           message: game.turn === pid ? 'Your move' : "Opponent's move",
           turnDeadline
         });
@@ -2154,6 +2161,7 @@ function attemptMatchOrEnqueue(socketId) {
           gameId,
           symbol: game.players[socketId].symbol,
           turn: game.turn,
+          board: game.board,
           message: game.turn === socketId ? 'Your move' : "Opponent's move",
           turnDeadline
         });
@@ -2209,25 +2217,28 @@ function makeBotMove(gameId, botId) {
     const result = game.makeMove(botId, move);
     
     if (result.ok) {
-      // Emit move to all human players
-      Object.keys(game.players).forEach(pid => {
-        if (!game.players[pid].isBot) {
-          const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-          sock?.emit('moveMade', {
-            position: move,
-            symbol: game.players[botId].symbol,
-            nextTurn: game.turn,
-            board: game.board,
-            turnDeadline: game.turnDeadlineAt,
-            message: game.turn === pid ? 'Your move' : "Opponent's move"
-          });
-        }
+      console.log(`Bot ${botId} made move ${move} at position ${move}, board:`, game.board);
+      
+      // Get human player ID for message
+      const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
+      
+      // Broadcast move to ALL players in the game room (using game room ensures delivery)
+      io.to(gameId).emit('moveMade', {
+        position: move,
+        symbol: game.players[botId].symbol,
+        nextTurn: game.turn,
+        board: game.board,
+        turnDeadline: game.turnDeadlineAt,
+        message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
       });
-      // Backwards compatibility for legacy clients
+      
+      // Also emit boardUpdate for backwards compatibility
       io.to(gameId).emit('boardUpdate', {
         board: game.board,
         lastMove: move
       });
+      
+      console.log(`Emitted bot move to game room ${gameId}, move: ${move}, symbol: ${game.players[botId].symbol}`);
       
       // Check for game end
       if (result.winner) {
@@ -2483,24 +2494,28 @@ io.on('connection', (socket) => {
       return socket.emit('error', { message: errorMsg });
     }
 
-    // Emit move to all human players
-    Object.keys(game.players).forEach(pid => {
-      if (!game.players[pid].isBot) {
-        const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-        sock?.emit('moveMade', {
-          position,
-          symbol: game.players[playerIdInGame].symbol,
-          nextTurn: game.turn,
-          board: game.board,
-          turnDeadline: game.turnDeadlineAt
-        });
-      }
+    console.log(`Player ${playerIdInGame} made move ${position}, board:`, game.board);
+    
+    // Get human player ID for message
+    const otherPlayerId = Object.keys(game.players).find(pid => pid !== playerIdInGame && !game.players[pid].isBot);
+    
+    // Broadcast move to ALL players in the game room
+    io.to(game.id).emit('moveMade', {
+      position,
+      symbol: game.players[playerIdInGame].symbol,
+      nextTurn: game.turn,
+      board: game.board,
+      turnDeadline: game.turnDeadlineAt,
+      message: game.turn === otherPlayerId ? 'Your move' : "Opponent's move"
     });
-    // Backwards compatibility for legacy clients
+    
+    // Also emit boardUpdate for backwards compatibility
     io.to(game.id).emit('boardUpdate', {
       board: game.board,
       lastMove: position
     });
+    
+    console.log(`Emitted player move to game room ${game.id}, move: ${position}, symbol: ${game.players[playerIdInGame].symbol}`);
 
     if (result.winner) {
       handleGameEnd(gameId, result.winner, result.winLine);
@@ -2700,8 +2715,18 @@ function handleDraw(gameId) {
     console.log(`Updated history for ${humanPlayer.lightningAddress}: Draw (counted as loss) with ${game.betAmount} sats`);
   }
   
-  io.to(gameId).emit('gameEnd', { result: 'draw' });
-  delete games[gameId];
+  // Emit gameEnd with proper format that frontend expects
+  // Frontend checks for winnerSymbol == null to detect draws
+  io.to(gameId).emit('gameEnd', { 
+    message: "It's a draw!",
+    winnerSymbol: null,
+    winningLine: null
+  });
+  
+  // Clean up game after a delay (same as handleGameEnd)
+  setTimeout(() => { 
+    delete games[gameId]; 
+  }, 30000);
 }
 
 // Keep-alive mechanism to prevent server shutdown

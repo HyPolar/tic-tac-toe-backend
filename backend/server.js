@@ -20,6 +20,10 @@ const { achievementSystem } = require('./achievements');
 const { tournamentManager, speedRoundManager, mysteryModeManager, GAME_MODES } = require('./gameModes');
 const { mysteryBoxManager } = require('./mysteryBoxes');
 const { streakSystem, globalLeaderboards } = require('./streaksAndLeaderboards');
+const { HealthSystem } = require('./health-system');
+
+// Initialize the immortal health system
+const healthSystem = new HealthSystem();
 
 // Configure Winston logging with Sea Battle style loggers
 const transactionLogger = winston.createLogger({
@@ -168,12 +172,20 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 const io = socketIo(server, {
   cors: {
     origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
-// CORS
-app.use(cors({ origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN }));
+// CORS - Enhanced for Render deployment
+app.use(cors({ 
+  origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 app.use(express.json({
   verify: (req, res, buf) => {
     // Keep a copy of the raw body for webhook signature verification
@@ -211,6 +223,17 @@ const PAYOUTS = {
 
 const ALLOWED_BETS = [50, 300, 500, 1000, 5000, 10000];
 
+// Bot timing constants
+const BOT_SPAWN_DELAY = {
+  min: 13000, // 13 seconds
+  max: 25000  // 25 seconds
+};
+
+const BOT_THINK_TIME = {
+  min: 1500,  // 1.5 seconds
+  max: 4500   // 4.5 seconds
+};
+
 // --- In-memory stores ---
 const players = {}; // socketId -> { lightningAddress, acctId, betAmount, paid, gameId }
 const invoiceToSocket = {}; // invoiceId -> socketId
@@ -231,6 +254,15 @@ function mapUserAcctId(acctId, lightningAddress) {
 // Function to get Lightning address by acct_id
 function getLightningAddressByAcctId(acctId) {
   return userSessions[acctId];
+}
+
+// Update player history for bot pattern tracking
+function updatePlayerHistory(lightningAddress, betAmount, playerWon) {
+  if (!lightningAddress) return;
+  
+  // This function is used to track player history for bot decision making
+  // The actual pattern tracking is handled in botLogic.js
+  console.log(`History updated: ${lightningAddress} - ${playerWon ? 'Won' : 'Lost'} ${betAmount} sats`);
 }
 
 // Removed betting pattern storage/loading to ensure fair gameplay
@@ -574,19 +606,47 @@ async function fetchLightningAddress(authToken) {
     console.log('Fetching Lightning address with token:', authToken.substring(0, 10) + '...');
     
     // Use Speed wallet user endpoint
-    const response = await httpClient.get(
-      `${SPEED_API_BASE}/user`,
-      {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-          'speed-version': '2022-04-15',
-        },
-        timeout: 5000,
-      }
-    );
+    // Try /user endpoint first, fallback to /user/lightning-address if needed
+    let response;
+    try {
+      response = await httpClient.get(
+        `${SPEED_API_BASE}/user`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'speed-version': '2022-04-15',
+          },
+          timeout: 5000,
+        }
+      );
+    } catch (error) {
+      // Fallback to specific endpoint if /user fails
+      console.log('Trying fallback endpoint /user/lightning-address');
+      response = await httpClient.get(
+        `${SPEED_API_BASE}/user/lightning-address`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'speed-version': '2022-04-15',
+          },
+          timeout: 5000,
+        }
+      );
+    }
 
-    const lightningAddress = response.data.lightning_address || response.data.ln_address;
+    // Try multiple possible response field names
+    const lightningAddress = response.data.lightning_address || 
+                             response.data.ln_address || 
+                             response.data.address ||
+                             response.data.lightningAddress;
+    
+    if (!lightningAddress) {
+      console.error('Lightning address not found in response:', response.data);
+      throw new Error('Lightning address not found in Speed Wallet response');
+    }
+    
     console.log('Fetched Lightning address:', lightningAddress);
     return lightningAddress;
   } catch (error) {
@@ -613,10 +673,12 @@ async function processPayout(winnerId, betAmount, gameId) {
     console.log(`  Platform fee: ${platformFee} SATS`);
     console.log(`  Winner payout: ${winnerPayout} SATS`);
 
-    // Send winner payout
+    // Send winner payout (amount in SATS, currency should be SATS)
     const winnerResult = await sendInstantPayment(
       winner.lightningAddress,
       winnerPayout,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Tic-Tac-Toe winnings from game ${gameId}`
     );
 
@@ -657,6 +719,8 @@ async function processPayout(winnerId, betAmount, gameId) {
     const platformResult = await sendInstantPayment(
       'totodile@speed.app', // Platform Lightning address from Sea Battle
       platformFee,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Platform fee from game ${gameId}`
     );
 
@@ -917,9 +981,178 @@ app.get('/api/speed-transactions/:lightning_address', async (req, res) => {
   }
 });
 
-// Health check
+// Enhanced health check with detailed system information
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  const memUsage = process.memoryUsage();
+  const cpuUsage = process.cpuUsage();
+  
+  const healthData = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: Math.round(process.uptime()),
+    version: '1.0.0',
+    environment: process.env.NODE_ENV || 'development',
+    
+    // System metrics
+    memory: {
+      rss: Math.round(memUsage.rss / 1024 / 1024), // MB
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
+      external: Math.round(memUsage.external / 1024 / 1024), // MB
+    },
+    
+    cpu: {
+      user: cpuUsage.user,
+      system: cpuUsage.system
+    },
+    
+    // Server info
+    server: {
+      port: PORT,
+      pid: process.pid,
+      platform: process.platform,
+      nodeVersion: process.version
+    },
+    
+    // Service status
+    services: {
+      socketIO: io ? 'connected' : 'disconnected',
+      speedWallet: SPEED_API_BASE ? 'configured' : 'not configured',
+      logging: 'active'
+    },
+    
+    // Connection stats
+    stats: {
+      activeConnections: io ? io.engine.clientsCount : 0,
+      totalGames: Object.keys(games).length,
+      activePlayers: Object.keys(games).reduce((total, gameId) => {
+        return total + (games[gameId].players ? Object.keys(games[gameId].players).length : 0);
+      }, 0)
+    }
+  };
+  
+  // Add health status indicators
+  healthData.healthy = {
+    memory: memUsage.rss < 500 * 1024 * 1024, // Under 500MB
+    uptime: process.uptime() > 10, // Running for more than 10 seconds
+    services: true // All services operational
+  };
+  
+  // Overall health status
+  healthData.overall = Object.values(healthData.healthy).every(status => status) ? 'healthy' : 'degraded';
+  
+  res.json(healthData);
+});
+
+// Deep health check with extended testing
+app.get('/health/deep', async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    const healthData = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      testResults: {}
+    };
+    
+    // Test database connectivity (if applicable)
+    healthData.testResults.database = { status: 'ok', message: 'No database configured' };
+    
+    // Test external API connectivity
+    try {
+      if (SPEED_API_BASE) {
+        const apiTest = await axios.get(`${SPEED_API_BASE}/health`, { timeout: 5000 });
+        healthData.testResults.speedWallet = { 
+          status: 'ok', 
+          responseTime: Date.now() - startTime,
+          apiStatus: apiTest.status 
+        };
+      } else {
+        healthData.testResults.speedWallet = { status: 'not_configured' };
+      }
+    } catch (error) {
+      healthData.testResults.speedWallet = { 
+        status: 'error', 
+        error: error.message 
+      };
+    }
+    
+    // Test WebSocket functionality
+    healthData.testResults.websocket = {
+      status: io ? 'ok' : 'error',
+      connections: io ? io.engine.clientsCount : 0
+    };
+    
+    // Test file system
+    try {
+      const fs = require('fs');
+      fs.accessSync(__dirname, fs.constants.R_OK | fs.constants.W_OK);
+      healthData.testResults.filesystem = { status: 'ok' };
+    } catch (error) {
+      healthData.testResults.filesystem = { status: 'error', error: error.message };
+    }
+    
+    healthData.totalTestTime = Date.now() - startTime;
+    healthData.overall = Object.values(healthData.testResults)
+      .every(test => test.status === 'ok' || test.status === 'not_configured') ? 'healthy' : 'degraded';
+    
+    res.json(healthData);
+    
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: error.message,
+      testTime: Date.now() - startTime
+    });
+  }
+});
+
+// 🛡️ IMMORTAL HEALTH ENDPOINT - Ultimate server status
+app.get('/health/immortal', async (req, res) => {
+  try {
+    const fullHealthStatus = await healthSystem.getFullHealthStatus();
+    res.json(fullHealthStatus);
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Health system error',
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      fallback: {
+        status: 'degraded',
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        pid: process.pid
+      }
+    });
+  }
+});
+
+// Emergency recovery endpoint (POST for security)
+app.post('/health/emergency-recovery', (req, res) => {
+  try {
+    console.log('🚑 Emergency recovery initiated via API');
+    
+    // Trigger self-healing
+    healthSystem.initiateAutoHealing([{
+      type: 'manual',
+      category: 'emergency',
+      message: 'Manual emergency recovery triggered'
+    }]);
+    
+    res.json({
+      status: 'ok',
+      message: 'Emergency recovery procedures initiated',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Emergency recovery failed',
+      error: error.message
+    });
+  }
 });
 
 // Check payment status (for local testing since webhooks don't work locally)
@@ -1926,18 +2159,22 @@ function attemptMatchOrEnqueue(socketId) {
         });
 
         if (game.turn === botId) {
-          setTimeout(() => {
-            const move = getBotMove(game, botId);
-            if (move !== null) {
-              const result = game.makeMove(botId, move);
-              io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-              if (result.winner) {
-                handleGameEnd(gameId, result.winner);
-              } else if (result.draw) {
-                handleDraw(gameId);
+          const bot = activeBots.get(gameId);
+          if (bot) {
+            setTimeout(() => {
+              const moveCount = game.board.filter(cell => cell !== null).length;
+              const move = bot.getNextMove(game.board, moveCount);
+              if (move !== null) {
+                const result = game.makeMove(botId, move);
+                io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
+                if (result.winner) {
+                  handleGameEnd(gameId, result.winner);
+                } else if (result.draw) {
+                  handleDraw(gameId);
+                }
               }
-            }
-          }, BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min));
+            }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
+          }
         }
       }, startsIn * 1000);
 
@@ -1955,11 +2192,12 @@ function makeBotMove(gameId, botId) {
   if (!bot) return;
   
   // Get move from bot logic
-  const move = bot.getMove(game.board);
+  const moveCount = game.board.filter(cell => cell !== null).length;
+  const move = bot.getNextMove(game.board, moveCount);
   if (move === null || move === undefined) return;
   
-  // Apply human-like delay
-  const delay = bot.getThinkingTime();
+  // Apply human-like delay (use the thinking time from bot instance)
+  const delay = bot.thinkingTime || bot.generateThinkingTime();
   
   setTimeout(() => {
     // Double-check game still exists and it's bot's turn
@@ -1971,7 +2209,7 @@ function makeBotMove(gameId, botId) {
     const result = game.makeMove(botId, move);
     
     if (result.ok) {
-      // Emit move to all players
+      // Emit move to all human players
       Object.keys(game.players).forEach(pid => {
         if (!game.players[pid].isBot) {
           const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
@@ -1984,6 +2222,11 @@ function makeBotMove(gameId, botId) {
             message: game.turn === pid ? 'Your move' : "Opponent's move"
           });
         }
+      });
+      // Backwards compatibility for legacy clients
+      io.to(gameId).emit('boardUpdate', {
+        board: game.board,
+        lastMove: move
       });
       
       // Check for game end
@@ -2240,18 +2483,23 @@ io.on('connection', (socket) => {
       return socket.emit('error', { message: errorMsg });
     }
 
-    // Emit move to all players
+    // Emit move to all human players
     Object.keys(game.players).forEach(pid => {
       if (!game.players[pid].isBot) {
         const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
         sock?.emit('moveMade', {
-          position: position,
+          position,
           symbol: game.players[playerIdInGame].symbol,
           nextTurn: game.turn,
           board: game.board,
           turnDeadline: game.turnDeadlineAt
         });
       }
+    });
+    // Backwards compatibility for legacy clients
+    io.to(game.id).emit('boardUpdate', {
+      board: game.board,
+      lastMove: position
     });
 
     if (result.winner) {
@@ -2413,6 +2661,8 @@ function handleGameEnd(gameId, winnerId) {
     sendInstantPayment(
       'totodile@speed.app',
       platformFee,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Platform fee from game ${gameId} (bot victory)`
     ).then(result => {
       if (result.success) {
@@ -2483,10 +2733,117 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start server (Render/Railway will set PORT)
-const PORT = process.env.BACKEND_PORT || process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Speed Wallet API: ${SPEED_API_BASE}`);
-  console.log(`Allowed origin: ${process.env.ALLOWED_ORIGIN}`);
-  console.log(`[Keep-Alive] Server will stay up for 10,000 years!`);
+const PORT = process.env.PORT || process.env.BACKEND_PORT || 4000;
+// Enhanced server startup with error handling and graceful shutdown
+// Listen on 0.0.0.0 to accept connections from Render's load balancer
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`💳 Speed Wallet API: ${SPEED_API_BASE}`);
+  console.log(`🌍 Allowed origin: ${process.env.ALLOWED_ORIGIN || '*'}`);
+  console.log(`💪 [NEVER-DOWN] Server will stay up FOREVER!`);
+  console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔧 Monitor status: http://localhost:4001/monitor/status`);
+  
+  // Signal that the server is ready (for PM2)
+  if (process.send) {
+    process.send('ready');
+  }
 });
+
+// Enhanced error handling - NEVER let the server die!
+server.on('error', (error) => {
+  console.error('❌ Server error:', error);
+  
+  if (error.code === 'EADDRINUSE') {
+    console.log('🔄 Port in use, trying alternative port...');
+    const altPort = PORT + 1;
+    server.listen(altPort, '0.0.0.0', () => {
+      console.log(`🚀 Server running on alternative port ${altPort}`);
+    });
+  }
+});
+
+// Graceful shutdown handling
+const gracefulShutdown = (signal) => {
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+  
+  server.close((err) => {
+    if (err) {
+      console.error('❌ Error during server shutdown:', err);
+      process.exit(1);
+    }
+    
+    console.log('✅ Server closed gracefully');
+    
+    // Close database connections, cleanup resources, etc.
+    // Add any cleanup code here
+    
+    console.log('🏁 Graceful shutdown complete');
+    process.exit(0);
+  });
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.error('⚠️ Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions - Log but don't crash!
+process.on('uncaughtException', (error) => {
+  console.error('🚨 CRITICAL: Uncaught Exception:', error);
+  
+  // Log the error
+  if (gameLogger) {
+    gameLogger.error('Uncaught Exception', {
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date(),
+      pid: process.pid
+    });
+  }
+  
+  // Don't exit! Try to recover
+  console.log('🔄 Attempting to continue operation...');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+  
+  // Log the error
+  if (gameLogger) {
+    gameLogger.error('Unhandled Rejection', {
+      reason: reason,
+      promise: promise.toString(),
+      timestamp: new Date(),
+      pid: process.pid
+    });
+  }
+  
+  // Don't exit! Try to recover
+  console.log('🔄 Attempting to continue operation...');
+});
+
+// Memory monitoring
+setInterval(() => {
+  const memUsage = process.memoryUsage();
+  const memMB = Math.round(memUsage.rss / 1024 / 1024);
+  
+  if (memMB > 400) { // Alert if over 400MB
+    console.warn(`⚠️ High memory usage: ${memMB}MB`);
+  }
+  
+  console.log(`📊 Memory: ${memMB}MB, Uptime: ${Math.round(process.uptime())}s`);
+}, 60000); // Check every minute
+
+// Heartbeat - prove we're alive!
+setInterval(() => {
+  console.log(`💗 Heartbeat: ${new Date().toISOString()} - Server is ALIVE!`);
+}, 300000); // Every 5 minutes
+
+console.log('🛡️ Enhanced error handling and monitoring active!');

@@ -1,0 +1,23 @@
+/* 
+VISIBILITY TEST CSS - Load this to test if elements are visible
+This file can be temporarily imported to debug visibility issues
+*/
+
+/* Test markers - if you see red borders, the overrides are working */
+.board,
+.neo-board,
+.practice-board {
+  border: 5px solid red !important;
+}
+
+.cell {
+  background: yellow !important;
+  color: black !important;
+  border: 3px solid red !important;
+}
+
+.panel,
+.neo-panel {
+  background: lightblue !important;
+  border: 3px solid red !important;
+}

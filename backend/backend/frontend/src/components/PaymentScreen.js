@@ -6,7 +6,8 @@ export default function PaymentScreen({
   message,
   onCopyPayment,
   onCancel,
-  qrCode
+  qrCode,
+  paymentTimer // Added Sea Battle timer prop
 }) {
   const [showInlineWindow, setShowInlineWindow] = useState(true);
 
@@ -31,8 +32,16 @@ export default function PaymentScreen({
       <div className="panel neo-panel glass">
         <h2>Payment Required</h2>
         <p className="payment-msg">{message}</p>
+        
+        {/* Payment timer - Sea Battle implementation */}
+        {paymentTimer !== undefined && (
+          <div className="payment-timer">
+            <span className="timer-label">Time remaining:</span>
+            <span className="timer-value">{Math.floor(paymentTimer / 60)}:{(paymentTimer % 60).toString().padStart(2, '0')}</span>
+          </div>
+        )}
 
-        {/* Same‑page payment window (no new tab) - only show if we have a hosted URL */}
+        {/* Same‑page payment window (no new tab) */}
         {showInlineWindow && payUrl ? (
           <div className="inline-payment-window" role="dialog" aria-label="Payment Window">
             <iframe
@@ -54,7 +63,6 @@ export default function PaymentScreen({
                 />
               )}
             </div>
-            <p className="qr-instruction">Scan with Lightning wallet or copy invoice below</p>
           </div>
         )}
 
@@ -67,22 +75,20 @@ export default function PaymentScreen({
         </div>
 
         <div className="actions">
-          {payUrl && (
-            <button 
-              className="neo-btn primary" 
-              onClick={() => setShowInlineWindow((v) => !v)}
-              aria-pressed={showInlineWindow}
-            >
-              {showInlineWindow ? 'Show QR Instead' : 'Show Inline Payment Window'}
-            </button>
-          )}
+          <button 
+            className="neo-btn primary" 
+            onClick={() => setShowInlineWindow((v) => !v)}
+            aria-pressed={showInlineWindow}
+          >
+            {showInlineWindow ? 'Show QR Instead' : 'Show Inline Payment Window'}
+          </button>
           <button className="neo-btn" onClick={onCopyPayment}>
             Copy Invoice
           </button>
-          {paymentInfo?.speedInterfaceUrl && (
+          {localStorage.getItem('speedInterfaceUrl') && (
             <button 
               className="neo-btn primary"
-              onClick={() => window.open(paymentInfo.speedInterfaceUrl, '_blank')}
+              onClick={() => window.open(localStorage.getItem('speedInterfaceUrl'), '_blank')}
               style={{
                 background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
               }}
