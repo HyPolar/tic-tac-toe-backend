@@ -2225,7 +2225,7 @@ function makeBotMove(gameId, botId) {
     const result = game.makeMove(botId, move);
     
     if (result.ok) {
-      // Emit move to all players
+      // Emit move to all human players
       Object.keys(game.players).forEach(pid => {
         if (!game.players[pid].isBot) {
           const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
@@ -2238,6 +2238,11 @@ function makeBotMove(gameId, botId) {
             message: game.turn === pid ? 'Your move' : "Opponent's move"
           });
         }
+      });
+      // Backwards compatibility for legacy clients
+      io.to(gameId).emit('boardUpdate', {
+        board: game.board,
+        lastMove: move
       });
       
       // Check for game end
@@ -2494,18 +2499,23 @@ io.on('connection', (socket) => {
       return socket.emit('error', { message: errorMsg });
     }
 
-    // Emit move to all players
+    // Emit move to all human players
     Object.keys(game.players).forEach(pid => {
       if (!game.players[pid].isBot) {
         const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
         sock?.emit('moveMade', {
-          position: position,
+          position,
           symbol: game.players[playerIdInGame].symbol,
           nextTurn: game.turn,
           board: game.board,
           turnDeadline: game.turnDeadlineAt
         });
       }
+    });
+    // Backwards compatibility for legacy clients
+    io.to(game.id).emit('boardUpdate', {
+      board: game.board,
+      lastMove: position
     });
 
     if (result.winner) {
