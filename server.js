@@ -2705,8 +2705,6 @@ function handleGameEnd(gameId, winnerId) {
 function handleDraw(gameId) {
   const game = games[gameId];
   if (!game) return;
-  game.status = 'finished';
-  game.clearTurnTimer();
   
   // Track draw for human players (counted as loss in patterns)
   const humanPlayer = Object.values(game.players).find(p => !p.isBot);
@@ -2715,18 +2713,68 @@ function handleDraw(gameId) {
     console.log(`Updated history for ${humanPlayer.lightningAddress}: Draw (counted as loss) with ${game.betAmount} sats`);
   }
   
-  // Emit gameEnd with proper format that frontend expects
-  // Frontend checks for winnerSymbol == null to detect draws
-  io.to(gameId).emit('gameEnd', { 
-    message: "It's a draw!",
-    winnerSymbol: null,
-    winningLine: null
+  // Switch starting player for next game (other player goes first)
+  const playerIds = Object.keys(game.players);
+  const otherPlayer = playerIds.find(id => id !== game.startingPlayer);
+  game.startingPlayer = otherPlayer || game.startingPlayer;
+  
+  // Reset the board and game state for automatic continuation
+  game.board = Array(9).fill(null);
+  game.status = 'playing';
+  game.winner = null;
+  game.winLine = [];
+  game.moveCount = 0;
+  game.isFirstTurn = true;
+  game.turn = game.startingPlayer;
+  game.clearTurnTimer();
+  
+  // Start the turn timer for the new starting player
+  game.startTurnTimer();
+  
+  // Emit draw notification and new game start to all players
+  const turnDeadline = game.turnDeadlineAt;
+  const playerIdsList = Object.keys(game.players);
+  
+  playerIdsList.forEach(pid => {
+    const player = game.players[pid];
+    if (player && player.lightningAddress) {
+      const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
+      if (playerSock && playerSock.connected) {
+        // First emit draw notification
+        playerSock.emit('gameEnd', { 
+          message: "It's a draw! New game starting...",
+          winnerSymbol: null,
+          winningLine: null,
+          autoContinue: true  // Signal to frontend to auto-continue
+        });
+        
+        // Then immediately start new game
+        setTimeout(() => {
+          playerSock.emit('startGame', {
+            gameId: game.id,
+            symbol: game.players[pid].symbol,
+            turn: game.turn,
+            board: game.board,
+            message: game.turn === pid ? 'Your move' : "Opponent's move",
+            turnDeadline: turnDeadline
+          });
+        }, 1000); // Small delay to show draw message
+      }
+    }
   });
   
-  // Clean up game after a delay (same as handleGameEnd)
-  setTimeout(() => { 
-    delete games[gameId]; 
-  }, 30000);
+  // If it's a bot's turn after reset, make the bot move
+  const botId = Object.keys(game.players).find(id => game.players[id].isBot);
+  if (botId && game.turn === botId) {
+    // Wait a bit longer for the startGame event to be processed, then make bot move
+    setTimeout(() => {
+      if (games[gameId] && games[gameId].status === 'playing' && games[gameId].turn === botId) {
+        makeBotMove(gameId, botId);
+      }
+    }, 1500);
+  }
+  
+  console.log(`Draw handled for game ${gameId}, new game started with ${game.startingPlayer} going first`);
 }
 
 // Keep-alive mechanism to prevent server shutdown

@@ -320,16 +320,7 @@ export default function App() {
         setTurnDuration(ttl);
         setMessage(message || (turn === s.id ? 'Your move' : "Opponent's move"));
       },
-      gameEnd: ({ message, winnerSymbol, winningLine, streakBonus: bonus }) => {
-        setGameState('finished');
-        setMessage(message);
-        setWinningLine(Array.isArray(winningLine) ? winningLine : null);
-        setTurnDeadline(null);
-        setTimeLeft(null);
-        if (bonus) {
-          setStreakBonus(bonus);
-          setTimeout(() => setStreakBonus(0), 5000);
-        }
+      gameEnd: ({ message, winnerSymbol, winningLine, streakBonus: bonus, autoContinue }) => {
         // Save to history
         const isWin = !!(winnerSymbol && symbol && winnerSymbol === symbol);
         const isDraw = winnerSymbol == null;
@@ -343,6 +334,27 @@ export default function App() {
         const newHist = [entry, ...history].slice(0, 100);
         setHistory(newHist);
         localStorage.setItem('ttt_history', JSON.stringify(newHist));
+        
+        // If autoContinue is true (draw with automatic new game), don't set to finished
+        // Just show the message and wait for startGame event
+        if (autoContinue && isDraw) {
+          setMessage(message);
+          setWinningLine(null);
+          // Don't set gameState to 'finished' - keep it playing so startGame can reset it
+          // The startGame event will reset everything properly
+          return; // Exit early, startGame will handle the reset
+        }
+        
+        // Normal game end (win/loss or draw without autoContinue)
+        setGameState('finished');
+        setMessage(message);
+        setWinningLine(Array.isArray(winningLine) ? winningLine : null);
+        setTurnDeadline(null);
+        setTimeLeft(null);
+        if (bonus) {
+          setStreakBonus(bonus);
+          setTimeout(() => setStreakBonus(0), 5000);
+        }
         if (isWin) {
           launchConfetti();
           sfxPlay('win');
