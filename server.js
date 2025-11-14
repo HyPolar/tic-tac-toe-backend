@@ -172,12 +172,20 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 const io = socketIo(server, {
   cors: {
     origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
-// CORS
-app.use(cors({ origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN }));
+// CORS - Enhanced for Render deployment
+app.use(cors({ 
+  origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 app.use(express.json({
   verify: (req, res, buf) => {
     // Keep a copy of the raw body for webhook signature verification
@@ -2733,10 +2741,11 @@ process.on('unhandledRejection', (reason, promise) => {
 // Start server (Render/Railway will set PORT)
 const PORT = process.env.PORT || process.env.BACKEND_PORT || 4000;
 // Enhanced server startup with error handling and graceful shutdown
-server.listen(PORT, () => {
+// Listen on 0.0.0.0 to accept connections from Render's load balancer
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`💳 Speed Wallet API: ${SPEED_API_BASE}`);
-  console.log(`🌍 Allowed origin: ${process.env.ALLOWED_ORIGIN}`);
+  console.log(`🌍 Allowed origin: ${process.env.ALLOWED_ORIGIN || '*'}`);
   console.log(`💪 [NEVER-DOWN] Server will stay up FOREVER!`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🔧 Monitor status: http://localhost:4001/monitor/status`);
@@ -2754,7 +2763,7 @@ server.on('error', (error) => {
   if (error.code === 'EADDRINUSE') {
     console.log('🔄 Port in use, trying alternative port...');
     const altPort = PORT + 1;
-    server.listen(altPort, () => {
+    server.listen(altPort, '0.0.0.0', () => {
       console.log(`🚀 Server running on alternative port ${altPort}`);
     });
   }
