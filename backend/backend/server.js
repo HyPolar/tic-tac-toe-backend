@@ -14,16 +14,11 @@ const { bech32 } = require('bech32');
 const Queue = require('express-queue');
 const winston = require('winston');
 require('winston-daily-rotate-file');
-const logForwarder = require('./log-forwarder');
 const { BotPlayer, getRandomBotSpawnDelay, generateBotLightningAddress } = require('./botLogic');
 const { achievementSystem } = require('./achievements');
 const { tournamentManager, speedRoundManager, mysteryModeManager, GAME_MODES } = require('./gameModes');
 const { mysteryBoxManager } = require('./mysteryBoxes');
 const { streakSystem, globalLeaderboards } = require('./streaksAndLeaderboards');
-const { HealthSystem } = require('./health-system');
-
-// Initialize the immortal health system
-const healthSystem = new HealthSystem();
 
 // Configure Winston logging with Sea Battle style loggers
 const transactionLogger = winston.createLogger({
@@ -94,37 +89,13 @@ const playerSessionLogger = winston.createLogger({
   ]
 });
 
-// Helper function to log player sessions - Sea Battle implementation
+// Helper function to log player sessions
 function logPlayerSession(lightningAddress, sessionData) {
-  // Compute derived values for better observability
-  const sessionEntry = {
+  playerSessionLogger.info({
     lightningAddress,
-    timestamp: new Date().toISOString(),
-    sessionData,
-    // Core tracking fields
-    gameId: sessionData.gameId || null,
-    playerId: sessionData.playerId || null,
-    betAmount: sessionData.betAmount || null,
-    paymentSent: sessionData.paymentSent || false,
-    paymentReceived: sessionData.paymentReceived || false,
-    gameResult: sessionData.gameResult || null, // 'won', 'lost', 'disconnected'
-    disconnectedDuringGame: sessionData.disconnectedDuringGame || false,
-    opponentType: sessionData.opponentType || null, // 'human', 'bot'
-    payoutAmount: sessionData.payoutAmount || 0,
-    payoutStatus: sessionData.payoutStatus || null // 'sent', 'failed', 'not_applicable'
-  };
-  
-  console.log('🎮 PLAYER SESSION LOG:', lightningAddress);
-  console.log('📊 Game Result:', sessionEntry.gameResult);
-  console.log('💰 Bet Amount:', sessionEntry.betAmount, 'SATS');
-  console.log('🏆 Payout:', sessionEntry.payoutAmount, 'SATS');
-  console.log('----------------------------------------');
-  
-  // Forward to local PC
-  logForwarder.logPlayerSession(lightningAddress, sessionEntry.sessionData);
-  
-  playerSessionLogger.info(sessionEntry);
-  return sessionEntry;
+    ...sessionData,
+    timestamp: new Date().toISOString()
+  });
 }
 
 const logger = winston.createLogger({
@@ -353,7 +324,6 @@ async function createLightningInvoice(amountSats, customerId, orderId) {
     });
 
     const data = resp.data;
-    console.log(`Speed API Response (${label}):`, JSON.stringify(data, null, 2));
     const invoiceId = data.id;
     const hostedInvoiceUrl = data.hosted_invoice_url || data.hosted_checkout_url || data.checkout_url || null;
 
@@ -416,39 +386,28 @@ async function createLightningInvoice(amountSats, customerId, orderId) {
   throw new Error('No valid invoice auth mode available. Set SPEED_INVOICE_AUTH_MODE to publishable|secret|auto.');
 }
 
-// Sea Battle exact payment implementation via /payments (BOLT11 or Lightning address)
-async function sendPayment(destination, amount, currency) {
+// New Speed Wallet payment via /payments (BOLT11 or Lightning address)
+async function sendPayment(destination, amount, note = '') {
   try {
-    let invoice;
+    let invoice = destination;
 
-    if (destination.includes('@')) {
-      console.log('Resolving Lightning address:', destination);
-      invoice = await resolveLightningAddress(destination, Number(amount), currency);
-      console.log('Resolved invoice:', invoice);
-      if (!invoice || !invoice.startsWith('ln')) {
-        throw new Error('Invalid or malformed invoice retrieved');
-      }
-    } else {
-      invoice = destination;
-      if (!invoice.startsWith('ln')) {
-        throw new Error('Invalid invoice format: must start with "ln"');
+    if (typeof destination === 'string') {
+      const lower = destination.toLowerCase();
+      if (lower.startsWith('lnurl')) {
+        invoice = await decodeAndFetchLnUrl(destination);
+      } else if (destination.includes('@')) {
+        if (!amount || Number(amount) <= 0) {
+          throw new Error('amountSats required for Lightning address payments');
+        }
+        invoice = await resolveLightningAddress(destination, Number(amount));
       }
     }
 
-    // Log the request details for debugging
-    const paymentPayload = {
-      payment_request: invoice
-    };
-    
-    console.log('Sending payment request to Speed API:', {
-      url: `${SPEED_API_BASE}/payments`,
-      payload: paymentPayload,
-      headers: {
-        Authorization: `Basic ${AUTH_HEADER}`,
-        'Content-Type': 'application/json',
-        'speed-version': '2022-04-15',
-      }
-    });
+    if (!invoice || typeof invoice !== 'string' || !invoice.toLowerCase().startsWith('ln')) {
+      throw new Error('Invalid or malformed invoice');
+    }
+
+    const paymentPayload = { payment_request: invoice };
 
     const response = await httpClient.post(
       `${SPEED_API_BASE}/payments`,
@@ -459,7 +418,7 @@ async function sendPayment(destination, amount, currency) {
           'Content-Type': 'application/json',
           'speed-version': '2022-04-15',
         },
-        timeout: 5000,
+        timeout: 10000,
       }
     );
 
@@ -467,8 +426,14 @@ async function sendPayment(destination, amount, currency) {
     return response.data;
   } catch (error) {
     const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-    console.error('Send Payment Error:', errorMessage);
-    throw new Error(`Failed to send payment: ${errorMessage}`);
+    const errorStatus = error.response?.status || 'No status';
+    const errorDetails = error.response?.data || error.message;
+    console.error('Send Payment Error:', {
+      message: errorMessage,
+      status: errorStatus,
+      details: errorDetails,
+    });
+    throw new Error(`Failed to send payment: ${errorMessage} (Status: ${errorStatus})`);
   }
 }
 
@@ -501,13 +466,8 @@ async function decodeAndFetchLnUrl(lnUrl) {
   }
 }
 
-// New Speed Wallet instant send function using the instant-send API - Sea Battle exact implementation
+// Send instant payment using Speed wallet API - Sea Battle implementation
 async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', targetCurrency = 'SATS', note = '') {
-
-  /*
-  Placeholder for sending payments logic
-  Integrate actual sending logic here
-  */
   try {
     console.log('Sending instant payment via Speed Wallet instant-send API:', {
       withdrawRequest,
@@ -542,6 +502,15 @@ async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', tar
     );
 
     console.log('Instant send response:', response.data);
+    transactionLogger.info({
+      event: 'payment_sent',
+      recipient: withdrawRequest,
+      amount: amount,
+      currency: currency,
+      targetCurrency: targetCurrency,
+      note: note,
+      response: response.data
+    });
     return response.data;
   } catch (error) {
     const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
@@ -551,6 +520,13 @@ async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', tar
       message: errorMessage,
       status: errorStatus,
       details: errorDetails,
+    });
+    errorLogger.error({
+      event: 'payment_send_failed',
+      recipient: withdrawRequest,
+      amount: amount,
+      error: errorMessage,
+      status: errorStatus
     });
     throw new Error(`Failed to send instant payment: ${errorMessage} (Status: ${errorStatus})`);
   }
@@ -921,220 +897,9 @@ app.get('/api/speed-transactions/:lightning_address', async (req, res) => {
   }
 });
 
-// Enhanced health check with detailed system information
+// Health check
 app.get('/health', (req, res) => {
-  const memUsage = process.memoryUsage();
-  const cpuUsage = process.cpuUsage();
-  
-  const healthData = {
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: Math.round(process.uptime()),
-    version: '1.0.0',
-    environment: process.env.NODE_ENV || 'development',
-    
-    // System metrics
-    memory: {
-      rss: Math.round(memUsage.rss / 1024 / 1024), // MB
-      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
-      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
-      external: Math.round(memUsage.external / 1024 / 1024), // MB
-    },
-    
-    cpu: {
-      user: cpuUsage.user,
-      system: cpuUsage.system
-    },
-    
-    // Server info
-    server: {
-      port: PORT,
-      pid: process.pid,
-      platform: process.platform,
-      nodeVersion: process.version
-    },
-    
-    // Service status
-    services: {
-      socketIO: io ? 'connected' : 'disconnected',
-      speedWallet: SPEED_API_BASE ? 'configured' : 'not configured',
-      logging: 'active'
-    },
-    
-    // Connection stats
-    stats: {
-      activeConnections: io ? io.engine.clientsCount : 0,
-      totalGames: Object.keys(games).length,
-      activePlayers: Object.keys(games).reduce((total, gameId) => {
-        return total + (games[gameId].players ? Object.keys(games[gameId].players).length : 0);
-      }, 0)
-    }
-  };
-  
-  // Add health status indicators
-  healthData.healthy = {
-    memory: memUsage.rss < 500 * 1024 * 1024, // Under 500MB
-    uptime: process.uptime() > 10, // Running for more than 10 seconds
-    services: true // All services operational
-  };
-  
-  // Overall health status
-  healthData.overall = Object.values(healthData.healthy).every(status => status) ? 'healthy' : 'degraded';
-  
-  res.json(healthData);
-});
-
-// Deep health check with extended testing
-app.get('/health/deep', async (req, res) => {
-  const startTime = Date.now();
-  
-  try {
-    const healthData = {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      testResults: {}
-    };
-    
-    // Test database connectivity (if applicable)
-    healthData.testResults.database = { status: 'ok', message: 'No database configured' };
-    
-    // Test external API connectivity
-    try {
-      if (SPEED_API_BASE) {
-        const apiTest = await axios.get(`${SPEED_API_BASE}/health`, { timeout: 5000 });
-        healthData.testResults.speedWallet = { 
-          status: 'ok', 
-          responseTime: Date.now() - startTime,
-          apiStatus: apiTest.status 
-        };
-      } else {
-        healthData.testResults.speedWallet = { status: 'not_configured' };
-      }
-    } catch (error) {
-      healthData.testResults.speedWallet = { 
-        status: 'error', 
-        error: error.message 
-      };
-    }
-    
-    // Test WebSocket functionality
-    healthData.testResults.websocket = {
-      status: io ? 'ok' : 'error',
-      connections: io ? io.engine.clientsCount : 0
-    };
-    
-    // Test file system
-    try {
-      const fs = require('fs');
-      fs.accessSync(__dirname, fs.constants.R_OK | fs.constants.W_OK);
-      healthData.testResults.filesystem = { status: 'ok' };
-    } catch (error) {
-      healthData.testResults.filesystem = { status: 'error', error: error.message };
-    }
-    
-    healthData.totalTestTime = Date.now() - startTime;
-    healthData.overall = Object.values(healthData.testResults)
-      .every(test => test.status === 'ok' || test.status === 'not_configured') ? 'healthy' : 'degraded';
-    
-    res.json(healthData);
-    
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      timestamp: new Date().toISOString(),
-      error: error.message,
-      testTime: Date.now() - startTime
-    });
-  }
-});
-
-// 🛡️ IMMORTAL HEALTH ENDPOINT - Ultimate server status
-app.get('/health/immortal', async (req, res) => {
-  try {
-    const fullHealthStatus = await healthSystem.getFullHealthStatus();
-    res.json(fullHealthStatus);
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Health system error',
-      error: error.message,
-      timestamp: new Date().toISOString(),
-      fallback: {
-        status: 'degraded',
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        pid: process.pid
-      }
-    });
-  }
-});
-
-// Emergency recovery endpoint (POST for security)
-app.post('/health/emergency-recovery', (req, res) => {
-  try {
-    console.log('🚑 Emergency recovery initiated via API');
-    
-    // Trigger self-healing
-    healthSystem.initiateAutoHealing([{
-      type: 'manual',
-      category: 'emergency',
-      message: 'Manual emergency recovery triggered'
-    }]);
-    
-    res.json({
-      status: 'ok',
-      message: 'Emergency recovery procedures initiated',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Emergency recovery failed',
-      error: error.message
-    });
-  }
-});
-
-// Check payment status (for local testing since webhooks don't work locally)
-app.get('/api/check-payment/:invoiceId', async (req, res) => {
-  try {
-    const { invoiceId } = req.params;
-    console.log('Checking payment status for invoice:', invoiceId);
-    
-    if (!invoiceId) {
-      return res.status(400).json({ success: false, error: 'Invoice ID is required' });
-    }
-
-    // Fetch invoice status from Speed API
-    const response = await axios.get(`${SPEED_API_BASE}/payments/${invoiceId}`, {
-      headers: {
-        'Authorization': `Basic ${AUTH_HEADER}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
-    });
-
-    const invoice = response.data;
-    console.log('Speed API invoice status:', { id: invoiceId, status: invoice.status });
-    
-    if (invoice.status === 'paid' || invoice.status === 'completed') {
-      // Manually trigger payment verification
-      handleInvoicePaid(invoiceId, { 
-        event_type: 'manual_verification',
-        data: { object: invoice }
-      });
-      return res.json({ success: true, status: invoice.status });
-    } else {
-      return res.json({ success: true, status: invoice.status });
-    }
-  } catch (error) {
-    console.error('Error checking payment status:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: 'Failed to check payment status',
-      details: error.message 
-    });
-  }
+  res.json({ status: 'ok' });
 });
 
 // Resolve LN input (Lightning address, LNURL, or BOLT11) to a BOLT11 invoice
@@ -1410,170 +1175,12 @@ app.get('/api/tournaments/:tournamentId', (req, res) => {
   }
 });
 
+// Game modes API
 app.get('/api/game-modes', (req, res) => {
   try {
     res.json(Object.values(GAME_MODES));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch game modes' });
-  }
-});
-
-// Bot Management API
-const { botStats, playerHistory, betHistory, getBotDifficulty, BOT_DIFFICULTY } = require('./botLogic');
-
-// Get bot statistics
-app.get('/api/bots/stats', (req, res) => {
-  try {
-    const stats = botStats.getStats();
-    const activeBotsCount = activeBots.size;
-    const playerHistorySize = playerHistory.size;
-    const betHistorySize = betHistory.size;
-    
-    res.json({
-      ...stats,
-      activeBots: activeBotsCount,
-      trackedPlayers: playerHistorySize,
-      betHistoryRecords: betHistorySize,
-      difficultyLevels: BOT_DIFFICULTY
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch bot stats' });
-  }
-});
-
-// Get active bot games
-app.get('/api/bots/active', (req, res) => {
-  try {
-    const activeBotGames = [];
-    for (const [gameId, bot] of activeBots.entries()) {
-      const game = games[gameId];
-      if (game) {
-        activeBotGames.push({
-          gameId: gameId,
-          betAmount: bot.betAmount,
-          shouldWin: bot.shouldWin,
-          moveCount: bot.moveHistory.length,
-          gameStatus: game.status,
-          opponentAddress: bot.opponentAddress
-        });
-      }
-    }
-    res.json({ activeBotGames, totalActive: activeBotGames.length });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch active bot games' });
-  }
-});
-
-// Get player history for specific Lightning address
-app.get('/api/bots/player-history/:lightningAddress', (req, res) => {
-  try {
-    const { lightningAddress } = req.params;
-    const history = playerHistory.get(lightningAddress);
-    const betInfo = betHistory.get(lightningAddress);
-    
-    if (!history && !betInfo) {
-      return res.status(404).json({ error: 'Player not found in bot history' });
-    }
-    
-    res.json({
-      lightningAddress,
-      gameHistory: history || null,
-      betHistory: betInfo || null,
-      recommendedDifficulty: history ? getBotDifficulty(50, history) : BOT_DIFFICULTY.EASY
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch player history' });
-  }
-});
-
-// Reset bot statistics (admin only)
-app.post('/api/bots/reset-stats', (req, res) => {
-  try {
-    // Reset bot stats
-    botStats.totalGames = 0;
-    botStats.totalWins = 0;
-    botStats.totalLosses = 0;
-    botStats.totalDraws = 0;
-    botStats.averageThinkTime = 0;
-    botStats.betAmountDistribution.clear();
-    
-    // Clear player and bet history
-    playerHistory.clear();
-    betHistory.clear();
-    
-    res.json({ success: true, message: 'Bot statistics reset successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to reset bot statistics' });
-  }
-});
-
-// Force bot spawn for testing
-app.post('/api/bots/force-spawn', (req, res) => {
-  try {
-    const { betAmount = 50, playerAddress = 'test@speed.app' } = req.body;
-    
-    // Create a test game with bot
-    const gameId = `test_${Date.now()}`;
-    const botId = `bot_${uuidv4()}`;
-    const botAddress = generateBotLightningAddress();
-    const bot = new BotPlayer(gameId, betAmount, playerAddress);
-    
-    activeBots.set(gameId, bot);
-    
-    res.json({
-      success: true,
-      gameId,
-      botId,
-      botAddress,
-      botShouldWin: bot.shouldWin,
-      betAmount: bot.betAmount,
-      message: 'Bot spawned successfully for testing'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to spawn test bot' });
-  }
-});
-
-// Get bot patterns and logic info
-app.get('/api/bots/patterns', (req, res) => {
-  try {
-    const { PATTERN_50_SATS, PATTERN_300_PLUS } = require('./botLogic');
-    
-    res.json({
-      patterns: {
-        '50_sats': {
-          pattern: PATTERN_50_SATS,
-          description: 'Pattern: W-L-W-W-L-L-L-W-L (repeats) - Player wins first game, balanced gameplay'
-        },
-        '300_plus': {
-          pattern: PATTERN_300_PLUS,
-          description: 'Pattern: L-W-L-W-L-L-W-L-W (repeats) - Player loses first, wins on EXACT same bet retry',
-          revengeLogic: 'Player wins 2nd game ONLY if same Lightning address + same bet amount after loss'
-        }
-      },
-      gameRules: {
-        turnTimers: {
-          firstTurn: '8 seconds',
-          subsequentTurns: '5 seconds',
-          drawTurns: '5 seconds (opponent goes first after draw)'
-        },
-        drawLogic: {
-          fairGames: 'Bot loses after 2-5 draws with silly mistake',
-          cheatingGames: 'Bot wins after 3-4 draws with strategic play',
-          afterDraw: 'Opponent gets first turn (5 seconds only)'
-        }
-      },
-      difficultyInfo: {
-        [BOT_DIFFICULTY.EASY]: 'Noob play with many mistakes (~30% win rate)',
-        [BOT_DIFFICULTY.MEDIUM]: 'Balanced strategic play (~50% win rate)',
-        [BOT_DIFFICULTY.HARD]: 'Smart strategic play with tension (~70% win rate)',
-        [BOT_DIFFICULTY.EXPERT]: 'Near perfect play with full competition (~85% win rate)'
-      },
-      spawnDelay: '13-25 seconds random delay when no human opponent found',
-      thinkingTime: '2-5 seconds human-like thinking time'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch bot patterns' });
+    res.status(500).json({ error: 'Failed to get game modes' });
   }
 });
 
@@ -1617,12 +1224,12 @@ app.post('/api/verify-payment', async (req, res) => {
   }
 });
 
-// Speed Wallet Webhook - Exact Sea Battle implementation (no signature verification)
-app.post('/webhook', express.json(), (req, res) => {
+// Speed Wallet Webhook - Exact Sea Battle implementation
+app.post('/webhook', webhookLimiter, webhookQueue, express.json(), (req, res) => {
   logger.debug('Webhook received', { headers: req.headers });
   const WEBHOOK_SECRET = process.env.SPEED_WALLET_WEBHOOK_SECRET || 'we_memya2mjjqpg1fjA';
   const event = req.body;
-  logger.info('Processing webhook event', { event: event.event_type, data: event.data })
+  logger.info('Processing webhook event', { event: event.event_type, data: event.data });
 
   try {
     const eventType = event.event_type;
@@ -1657,9 +1264,6 @@ app.post('/webhook', express.json(), (req, res) => {
         };
         
         transactionLogger.info(paymentData);
-        
-        // Forward payment log to PC
-        logForwarder.logPayment(socketId, paymentData);
 
         if (sock) {
           sock.emit('paymentVerified');
@@ -1671,25 +1275,11 @@ app.post('/webhook', express.json(), (req, res) => {
         players[socketId].paid = true;
         logger.info('Payment verified for player', { playerId: socketId, invoiceId });
 
-        // Log player session with payment received status
-        console.log('💳 PAYMENT VERIFIED for:', players[socketId].lightningAddress);
-        console.log('💰 Amount:', players[socketId].betAmount, 'SATS');
-        if (players[socketId].lightningAddress) {
-          logPlayerSession(players[socketId].lightningAddress, {
-            event: 'payment_received',
-            playerId: socketId,
-            betAmount: players[socketId].betAmount,
-            invoiceId: invoiceId
-          });
-        }
-
-        // Find or create game immediately after payment
         let game = Object.values(games).find(g => 
-          Object.keys(g.players).length === 1 && g.betAmount === players[socketId].betAmount
+          Object.keys(g.players).length === 1 && g.betAmount === players[socketId].betAmount,
         );
         
         if (!game) {
-          // Create new game if no waiting game found
           const gameId = `game_${Date.now()}`;
           game = new Game(gameId, players[socketId].betAmount);
           games[gameId] = game;
@@ -1704,181 +1294,30 @@ app.post('/webhook', express.json(), (req, res) => {
           });
         }
         
-        // Add player to game
         game.addPlayer(socketId, players[socketId].lightningAddress);
         if (sock) {
           sock.join(game.id);
-        }
-        
-        // Check if game is ready to start (2 players)
-        if (Object.keys(game.players).length === 2) {
-          // Both players are ready, start the game
-          const playerIds = Object.keys(game.players);
-          const startsIn = 5;
-          const startAt = Date.now() + startsIn * 1000;
-          
-          // Clear bot spawn timers for both players since they found human opponents
-          playerIds.forEach(pid => {
-            if (botSpawnTimers[pid]) {
-              clearTimeout(botSpawnTimers[pid]);
-              delete botSpawnTimers[pid];
-              console.log(`Cleared bot spawn timer for player ${pid} - found human opponent`);
-            }
-          });
-          
-          // Notify both players
-          playerIds.forEach(pid => {
-            const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-            playerSock?.emit('matchFound', { opponent: { type: 'player' }, startsIn, startAt });
-          });
-          
-          // Start game after countdown
-          setTimeout(() => {
-            // Double-check game still exists
-            if (!games[game.id]) {
-              console.log(`Game ${game.id} no longer exists, skipping start`);
-              return;
-            }
-            
-            game.status = 'playing';
-            game.startTurnTimer();
-            const turnDeadline = game.turnDeadlineAt || null;
-            
-            // Store game-player mapping for reconnection
-            playerIds.forEach(pid => {
-              const player = game.players[pid];
-              if (player && player.lightningAddress) {
-                // Store mapping of Lightning address to game for reconnection
-                const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                if (playerSock && playerSock.connected) {
-                  playerSock.gameId = game.id;
-                  playerSock.playerIdInGame = pid;
-                  playerSock.emit('startGame', {
-                    gameId: game.id,
-                    symbol: game.players[pid].symbol,
-                    turn: game.turn,
-                    message: game.turn === pid ? 'Your move' : "Opponent's move",
-                    turnDeadline
-                  });
-                  console.log(`Sent startGame to player ${pid}`);
-                } else {
-                  console.log(`Player ${pid} socket not connected for game start`);
-                }
-              }
-            });
-            
-            gameLogger.info({
-              event: 'game_started',
-              gameId: game.id,
-              players: playerIds,
-              betAmount: game.betAmount,
-              timestamp: new Date().toISOString()
-            });
-          }, startsIn * 1000);
         } else {
-          // Waiting for another player - schedule bot spawn
-          if (sock) {
-            const delay = getRandomBotSpawnDelay();
-            const estWaitSeconds = Math.floor(delay / 1000);
-            
-            sock.emit('waitingForOpponent', {
-              message: 'Finding opponent...',
-              estimatedWait: `${13}-${25} seconds`,
-              playersInGame: Object.keys(game.players).length
-            });
-            
-            // Schedule bot to join if no real player joins
-            botSpawnTimers[socketId] = setTimeout(() => {
-              // Check if still waiting
-              const currentGame = Object.values(games).find(g => 
-                g.players[socketId] && Object.keys(g.players).length === 1
-              );
-              
-              if (currentGame) {
-                // Add bot to game
-                const botId = `bot_${uuidv4()}`;
-                const botAddress = generateBotLightningAddress();
-                const bot = new BotPlayer(currentGame.id, currentGame.betAmount, players[socketId].lightningAddress);
-                activeBots.set(currentGame.id, bot);
-                
-                currentGame.addPlayer(botId, botAddress, true);
-                players[botId] = {
-                  lightningAddress: botAddress,
-                  betAmount: currentGame.betAmount,
-                  paid: true,
-                  isBot: true,
-                  gameId: currentGame.id
-                };
-                
-                // Notify players that match is found
-                const playerIds = Object.keys(currentGame.players);
-                const startsIn = 5;
-                const startAt = Date.now() + startsIn * 1000;
-                
-                playerIds.forEach(pid => {
-                  if (!currentGame.players[pid].isBot) {
-                    const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                    playerSock?.emit('matchFound', { 
-                      opponent: { type: 'player' }, // Don't reveal it's a bot
-                      startsIn, 
-                      startAt 
-                    });
-                  }
-                });
-                
-                // Start game after countdown
-                setTimeout(() => {
-                  // Double-check game still exists
-                  if (!games[currentGame.id]) {
-                    console.log(`Game ${currentGame.id} no longer exists, skipping bot game start`);
-                    return;
-                  }
-                  
-                  currentGame.status = 'playing';
-                  currentGame.startTurnTimer();
-                  const turnDeadline = currentGame.turnDeadlineAt || null;
-                  
-                  playerIds.forEach(pid => {
-                    if (!currentGame.players[pid].isBot) {
-                      const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-                      if (playerSock && playerSock.connected) {
-                        playerSock.emit('startGame', {
-                          gameId: currentGame.id,
-                          symbol: currentGame.players[pid].symbol,
-                          turn: currentGame.turn,
-                          message: currentGame.turn === pid ? 'Your move' : "Opponent's move",
-                          turnDeadline
-                        });
-                        console.log(`Sent startGame to human player ${pid} in bot game`);
-                      } else {
-                        console.log(`Human player ${pid} disconnected before bot game start`);
-                      }
-                    }
-                  });
-                  
-                  // If bot starts, make first move
-                  if (currentGame.players[currentGame.turn]?.isBot) {
-                    makeBotMove(currentGame.id, currentGame.turn);
-                  }
-                  
-                  gameLogger.info({
-                    event: 'game_started_with_bot',
-                    gameId: currentGame.id,
-                    humanPlayer: socketId,
-                    botPlayer: botId,
-                    betAmount: currentGame.betAmount,
-                    timestamp: new Date().toISOString()
-                  });
-                }, startsIn * 1000);
-                
-                delete botSpawnTimers[socketId];
-              }
-            }, delay);
+          // If socket is gone, immediately mark as disconnected and start timer
+          try {
+            // Handle offline player scenario
+          } catch (e) {
+            logger.warn(`Failed to start disconnect timer for offline player ${socketId}: ${e.message}`);
           }
         }
         
+        // Update player session with payment sent status
+        console.log('💳 PAYMENT VERIFIED for:', players[socketId].lightningAddress);
+        console.log('💰 Amount:', players[socketId].betAmount, 'SATS');
+        if (players[socketId].lightningAddress) {
+          logPlayerSession(players[socketId].lightningAddress, {
+            paymentSent: true,
+            gameId: game.id,
+            betAmount: players[socketId].betAmount
+          });
+        }
+
         delete invoiceToSocket[invoiceId];
-        delete invoiceMeta[invoiceId];
         break;
 
       case 'payment.failed':
@@ -1908,7 +1347,6 @@ app.post('/webhook', express.json(), (req, res) => {
           logger.warn('Payment failed for player', { playerId: failedSocketId, invoiceId: failedInvoiceId });
           delete players[failedSocketId];
           delete invoiceToSocket[failedInvoiceId];
-          delete invoiceMeta[failedInvoiceId];
         } else {
           logger.warn(`Webhook warning: No socket mapping found for failed invoice ${failedInvoiceId}. Player may have disconnected.`);
         }
@@ -1924,6 +1362,7 @@ app.post('/webhook', express.json(), (req, res) => {
     res.status(500).send('Webhook processing failed');
   }
 });
+console.log('Debug-2025-06-16-2: Webhook route added');
 
 function handleInvoicePaid(invoiceId, event) {
   console.log('handleInvoicePaid called for invoice:', invoiceId);
@@ -2064,27 +1503,20 @@ function attemptMatchOrEnqueue(socketId) {
     if (!waitingQueue.find(p => p.socketId === socketId)) {
       waitingQueue.push({ socketId, lightningAddress: player.lightningAddress, betAmount: player.betAmount });
     }
-    const delay = getRandomBotSpawnDelay();
+    const delay = BOT_SPAWN_DELAY.min + Math.random() * (BOT_SPAWN_DELAY.max - BOT_SPAWN_DELAY.min);
     const spawnAt = Date.now() + delay;
     const estWaitSeconds = Math.floor(delay / 1000);
     sock?.emit('waitingForOpponent', {
-      minWait: 13, // 13 seconds minimum
-      maxWait: 25, // 25 seconds maximum
+      minWait: Math.floor(BOT_SPAWN_DELAY.min / 1000),
+      maxWait: Math.floor(BOT_SPAWN_DELAY.max / 1000),
       estWaitSeconds,
       spawnAt
     });
 
-    console.log(`Scheduling bot spawn for player ${socketId} in ${estWaitSeconds} seconds`);
-    
     botSpawnTimers[socketId] = setTimeout(() => {
-      console.log(`Bot spawn timer triggered for player ${socketId}`);
       const stillWaiting = waitingQueue.findIndex(p => p.socketId === socketId);
-      if (stillWaiting === -1) {
-        console.log(`Player ${socketId} no longer waiting - bot spawn cancelled`);
-        return;
-      }
+      if (stillWaiting === -1) return;
       waitingQueue.splice(stillWaiting, 1);
-      console.log(`Spawning bot opponent for player ${socketId}`);
 
       const botId = `bot_${uuidv4()}`;
       const botAddress = generateBotLightningAddress();
@@ -2196,7 +1628,7 @@ function handleGameEnd(gameId, winnerId) {
   game.status = 'finished';
   game.clearTurnTimer();
   
-  // Clean up bot and record statistics
+  // Clean up bot
   const bot = activeBots.get(gameId);
   if (bot) {
     // Update player history if human player
@@ -2204,22 +1636,7 @@ function handleGameEnd(gameId, winnerId) {
     if (humanId) {
       const humanPlayer = game.players[humanId];
       const playerWon = winnerId === humanId;
-      const botWon = !playerWon && winnerId && game.players[winnerId]?.isBot;
-      const isDraw = !winnerId;
-      
-      // Record game result for bot learning
       bot.recordGameResult(playerWon);
-      
-      // Record bot statistics
-      let result;
-      if (isDraw) result = 'draw';
-      else if (botWon) result = 'win';
-      else result = 'loss';
-      
-      botStats.recordGame(result, bot.betAmount, bot.thinkingTime);
-      
-      // Log bot game completion
-      console.log(`Bot game completed: ${gameId}, Result: ${result}, Bet: ${bot.betAmount} SATS, Human: ${humanPlayer.lightningAddress}`);
     }
     activeBots.delete(gameId);
   }
@@ -2672,116 +2089,10 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start server (Render/Railway will set PORT)
-const PORT = process.env.PORT || process.env.BACKEND_PORT || 4000;
-// Enhanced server startup with error handling and graceful shutdown
+const PORT = process.env.BACKEND_PORT || process.env.PORT || 4000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`💳 Speed Wallet API: ${SPEED_API_BASE}`);
-  console.log(`🌍 Allowed origin: ${process.env.ALLOWED_ORIGIN}`);
-  console.log(`💪 [NEVER-DOWN] Server will stay up FOREVER!`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🔧 Monitor status: http://localhost:4001/monitor/status`);
-  
-  // Signal that the server is ready (for PM2)
-  if (process.send) {
-    process.send('ready');
-  }
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Speed Wallet API: ${SPEED_API_BASE}`);
+  console.log(`Allowed origin: ${process.env.ALLOWED_ORIGIN}`);
+  console.log(`[Keep-Alive] Server will stay up for 10,000 years!`);
 });
-
-// Enhanced error handling - NEVER let the server die!
-server.on('error', (error) => {
-  console.error('❌ Server error:', error);
-  
-  if (error.code === 'EADDRINUSE') {
-    console.log('🔄 Port in use, trying alternative port...');
-    const altPort = PORT + 1;
-    server.listen(altPort, () => {
-      console.log(`🚀 Server running on alternative port ${altPort}`);
-    });
-  }
-});
-
-// Graceful shutdown handling
-const gracefulShutdown = (signal) => {
-  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
-  
-  server.close((err) => {
-    if (err) {
-      console.error('❌ Error during server shutdown:', err);
-      process.exit(1);
-    }
-    
-    console.log('✅ Server closed gracefully');
-    
-    // Close database connections, cleanup resources, etc.
-    // Add any cleanup code here
-    
-    console.log('🏁 Graceful shutdown complete');
-    process.exit(0);
-  });
-  
-  // Force shutdown after 10 seconds
-  setTimeout(() => {
-    console.error('⚠️ Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-};
-
-// Handle shutdown signals
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Handle uncaught exceptions - Log but don't crash!
-process.on('uncaughtException', (error) => {
-  console.error('🚨 CRITICAL: Uncaught Exception:', error);
-  
-  // Log the error
-  if (gameLogger) {
-    gameLogger.error('Uncaught Exception', {
-      error: error.message,
-      stack: error.stack,
-      timestamp: new Date(),
-      pid: process.pid
-    });
-  }
-  
-  // Don't exit! Try to recover
-  console.log('🔄 Attempting to continue operation...');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('🚨 CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
-  
-  // Log the error
-  if (gameLogger) {
-    gameLogger.error('Unhandled Rejection', {
-      reason: reason,
-      promise: promise.toString(),
-      timestamp: new Date(),
-      pid: process.pid
-    });
-  }
-  
-  // Don't exit! Try to recover
-  console.log('🔄 Attempting to continue operation...');
-});
-
-// Memory monitoring
-setInterval(() => {
-  const memUsage = process.memoryUsage();
-  const memMB = Math.round(memUsage.rss / 1024 / 1024);
-  
-  if (memMB > 400) { // Alert if over 400MB
-    console.warn(`⚠️ High memory usage: ${memMB}MB`);
-  }
-  
-  console.log(`📊 Memory: ${memMB}MB, Uptime: ${Math.round(process.uptime())}s`);
-}, 60000); // Check every minute
-
-// Heartbeat - prove we're alive!
-setInterval(() => {
-  console.log(`💗 Heartbeat: ${new Date().toISOString()} - Server is ALIVE!`);
-}, 300000); // Every 5 minutes
-
-console.log('🛡️ Enhanced error handling and monitoring active!');

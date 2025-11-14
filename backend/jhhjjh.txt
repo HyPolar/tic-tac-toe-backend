@@ -1,0 +1,35 @@
+so, make the game fully integrated to speed wallet(it automatically fetches users LN address , makes the payment when the player wins the game,etc)take evrything you need from sea battle game.
+Make the how to play content funny like in the first page(you do not even know how to play a simple tic tac toe game or something like it) but on the second page and onward guide the user about 
+everything like payments, receiving payment etc.
+when we start the game, there should be a waiting for opponent screen which shows estimated waiting time: 13-25 seconds. If a real player joins in 0-25 seconds then the game starts, if not a bot joins
+the bot b/w 13-25 seconds randomly.The bot should totally behave like normal player and should behave according to a given logic.After the player is found or matched with
+a bot the screen should show: opponent found starting game in 5... and then the countdown from 5 to 1,then game starts
+In the start game screen add the terms and condition and privacy policy, make them bigger and note each and everything, and add clauses so that the player can never sue me for anything.also add
+that we can add bots in the game but make sure that these things are in between the terms and coditions,so that the player do not spot easily.
+Inside the start game, there should be clearly written that by playing the game you agree to our terms and conditions and privacy policy.
+The UI should be next level, futuristic, and totally a god level design ,that everyone in the world praises.
+The rules for bot are:
+In bet amount of 50 sats on which the player would win 80 sats,in this bet amount If the player is against the bot, He should win his first
+match,then lose the next, then win again and then win again and then lose,lose and again lose ,and then win..So basically the pattern would be:
+W-L-W-W-L-L-L-W-L and then repeat
+
+And for the 300 sats or more bet:
+
+the player loose his first bet... and if he plays again let him win ... like if he bet 300 sats first time , he loses and if bets the same amount again,
+he should win, the game should check if the LN address is same or not,and if it's his 2nd game he wins and so on, third game lost, fourth win, fifth lose sixth win ...
+and we should make these things sure-
+1) He should win in second chances only if the bet amount is same as in the lost one ... not like if bet 300 in first lost then bets 1000 sats
+and bet and he wins 1700 .. the bet amount should be same, if lost in first 500 bet, should win in next 500 sats bet.
+2) the LN address should be same
+3)In fair games, the bot should be noob, and would lose after a silly mistake randomly after 2-5 draws. But in the cheating game, the bot will win after 3-4 draws.
+4) the bot should loose after giving a full tensed competition, so basically,
+The player will lose his first game and then win the next, and the full logic will be- L-W-L-W-L-L-W-L-W then repeat.
+
+
+Now on the other logics-
+The bot and player both have only 5 seconds to think where they have to mark 'X' or 'O'.. there would be timer above for five seconds.The first turn would be random between
+player vs. player or bot vs. player.
+and the first turn will have 8 seconds to decide where it has to take it's first turn ,and then for all moves would be 5 seconds, even if the matches draw, there would be 5 seconds.
+If the macth is draw the opponent will have first turn for 5 seconds only.(Also mention this in how to play.
+I will add background ,sounds, music,later
+
