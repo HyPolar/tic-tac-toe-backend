@@ -1544,15 +1544,6 @@ app.post('/webhook', express.json(), (req, res) => {
           const startsIn = 5;
           const startAt = Date.now() + startsIn * 1000;
           
-          // Clear bot spawn timers for both players since they found human opponents
-          playerIds.forEach(pid => {
-            if (botSpawnTimers[pid]) {
-              clearTimeout(botSpawnTimers[pid]);
-              delete botSpawnTimers[pid];
-              console.log(`Cleared bot spawn timer for player ${pid} - found human opponent`);
-            }
-          });
-          
           // Notify both players
           playerIds.forEach(pid => {
             const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
@@ -1891,27 +1882,20 @@ function attemptMatchOrEnqueue(socketId) {
     if (!waitingQueue.find(p => p.socketId === socketId)) {
       waitingQueue.push({ socketId, lightningAddress: player.lightningAddress, betAmount: player.betAmount });
     }
-    const delay = getRandomBotSpawnDelay();
+    const delay = BOT_SPAWN_DELAY.min + Math.random() * (BOT_SPAWN_DELAY.max - BOT_SPAWN_DELAY.min);
     const spawnAt = Date.now() + delay;
     const estWaitSeconds = Math.floor(delay / 1000);
     sock?.emit('waitingForOpponent', {
-      minWait: 13, // 13 seconds minimum
-      maxWait: 25, // 25 seconds maximum
+      minWait: Math.floor(BOT_SPAWN_DELAY.min / 1000),
+      maxWait: Math.floor(BOT_SPAWN_DELAY.max / 1000),
       estWaitSeconds,
       spawnAt
     });
 
-    console.log(`Scheduling bot spawn for player ${socketId} in ${estWaitSeconds} seconds`);
-    
     botSpawnTimers[socketId] = setTimeout(() => {
-      console.log(`Bot spawn timer triggered for player ${socketId}`);
       const stillWaiting = waitingQueue.findIndex(p => p.socketId === socketId);
-      if (stillWaiting === -1) {
-        console.log(`Player ${socketId} no longer waiting - bot spawn cancelled`);
-        return;
-      }
+      if (stillWaiting === -1) return;
       waitingQueue.splice(stillWaiting, 1);
-      console.log(`Spawning bot opponent for player ${socketId}`);
 
       const botId = `bot_${uuidv4()}`;
       const botAddress = generateBotLightningAddress();

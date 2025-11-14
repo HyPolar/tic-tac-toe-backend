@@ -215,6 +215,17 @@ const PAYOUTS = {
 
 const ALLOWED_BETS = [50, 300, 500, 1000, 5000, 10000];
 
+// Bot timing constants
+const BOT_SPAWN_DELAY = {
+  min: 13000, // 13 seconds
+  max: 25000  // 25 seconds
+};
+
+const BOT_THINK_TIME = {
+  min: 1500,  // 1.5 seconds
+  max: 4500   // 4.5 seconds
+};
+
 // --- In-memory stores ---
 const players = {}; // socketId -> { lightningAddress, acctId, betAmount, paid, gameId }
 const invoiceToSocket = {}; // invoiceId -> socketId
@@ -235,6 +246,15 @@ function mapUserAcctId(acctId, lightningAddress) {
 // Function to get Lightning address by acct_id
 function getLightningAddressByAcctId(acctId) {
   return userSessions[acctId];
+}
+
+// Update player history for bot pattern tracking
+function updatePlayerHistory(lightningAddress, betAmount, playerWon) {
+  if (!lightningAddress) return;
+  
+  // This function is used to track player history for bot decision making
+  // The actual pattern tracking is handled in botLogic.js
+  console.log(`History updated: ${lightningAddress} - ${playerWon ? 'Won' : 'Lost'} ${betAmount} sats`);
 }
 
 // Removed betting pattern storage/loading to ensure fair gameplay
@@ -578,19 +598,47 @@ async function fetchLightningAddress(authToken) {
     console.log('Fetching Lightning address with token:', authToken.substring(0, 10) + '...');
     
     // Use Speed wallet user endpoint
-    const response = await httpClient.get(
-      `${SPEED_API_BASE}/user`,
-      {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-          'speed-version': '2022-04-15',
-        },
-        timeout: 5000,
-      }
-    );
+    // Try /user endpoint first, fallback to /user/lightning-address if needed
+    let response;
+    try {
+      response = await httpClient.get(
+        `${SPEED_API_BASE}/user`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'speed-version': '2022-04-15',
+          },
+          timeout: 5000,
+        }
+      );
+    } catch (error) {
+      // Fallback to specific endpoint if /user fails
+      console.log('Trying fallback endpoint /user/lightning-address');
+      response = await httpClient.get(
+        `${SPEED_API_BASE}/user/lightning-address`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'speed-version': '2022-04-15',
+          },
+          timeout: 5000,
+        }
+      );
+    }
 
-    const lightningAddress = response.data.lightning_address || response.data.ln_address;
+    // Try multiple possible response field names
+    const lightningAddress = response.data.lightning_address || 
+                             response.data.ln_address || 
+                             response.data.address ||
+                             response.data.lightningAddress;
+    
+    if (!lightningAddress) {
+      console.error('Lightning address not found in response:', response.data);
+      throw new Error('Lightning address not found in Speed Wallet response');
+    }
+    
     console.log('Fetched Lightning address:', lightningAddress);
     return lightningAddress;
   } catch (error) {
@@ -617,10 +665,12 @@ async function processPayout(winnerId, betAmount, gameId) {
     console.log(`  Platform fee: ${platformFee} SATS`);
     console.log(`  Winner payout: ${winnerPayout} SATS`);
 
-    // Send winner payout
+    // Send winner payout (amount in SATS, currency should be SATS)
     const winnerResult = await sendInstantPayment(
       winner.lightningAddress,
       winnerPayout,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Tic-Tac-Toe winnings from game ${gameId}`
     );
 
@@ -661,6 +711,8 @@ async function processPayout(winnerId, betAmount, gameId) {
     const platformResult = await sendInstantPayment(
       'totodile@speed.app', // Platform Lightning address from Sea Battle
       platformFee,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Platform fee from game ${gameId}`
     );
 
@@ -2115,18 +2167,22 @@ function attemptMatchOrEnqueue(socketId) {
         });
 
         if (game.turn === botId) {
-          setTimeout(() => {
-            const move = getBotMove(game, botId);
-            if (move !== null) {
-              const result = game.makeMove(botId, move);
-              io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-              if (result.winner) {
-                handleGameEnd(gameId, result.winner);
-              } else if (result.draw) {
-                handleDraw(gameId);
+          const bot = activeBots.get(gameId);
+          if (bot) {
+            setTimeout(() => {
+              const moveCount = game.board.filter(cell => cell !== null).length;
+              const move = bot.getNextMove(game.board, moveCount);
+              if (move !== null) {
+                const result = game.makeMove(botId, move);
+                io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
+                if (result.winner) {
+                  handleGameEnd(gameId, result.winner);
+                } else if (result.draw) {
+                  handleDraw(gameId);
+                }
               }
-            }
-          }, BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min));
+            }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
+          }
         }
       }, startsIn * 1000);
 
@@ -2144,11 +2200,12 @@ function makeBotMove(gameId, botId) {
   if (!bot) return;
   
   // Get move from bot logic
-  const move = bot.getMove(game.board);
+  const moveCount = game.board.filter(cell => cell !== null).length;
+  const move = bot.getNextMove(game.board, moveCount);
   if (move === null || move === undefined) return;
   
-  // Apply human-like delay
-  const delay = bot.getThinkingTime();
+  // Apply human-like delay (use the thinking time from bot instance)
+  const delay = bot.thinkingTime || bot.generateThinkingTime();
   
   setTimeout(() => {
     // Double-check game still exists and it's bot's turn
@@ -2602,6 +2659,8 @@ function handleGameEnd(gameId, winnerId) {
     sendInstantPayment(
       'totodile@speed.app',
       platformFee,
+      'SATS', // currency
+      'SATS', // targetCurrency
       `Platform fee from game ${gameId} (bot victory)`
     ).then(result => {
       if (result.success) {

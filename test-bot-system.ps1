@@ -121,7 +121,6 @@ Write-Host "  50 SATS:  W-L-W-W-L-L-L-W-L (repeats) - Player wins first" -Foregr
 Write-Host "  300+ SATS: L-W-L-W-L-L-W-L-W (repeats) - Player loses first" -ForegroundColor White
 Write-Host "  Revenge:  Same LN address + same bet amount = guaranteed win" -ForegroundColor Yellow
 Write-Host "  Timing:   First turn 8s, subsequent turns 5s, draws 5s" -ForegroundColor White
-Write-Host "  Bot Spawn: 13-25 seconds random delay (no instant joins)" -ForegroundColor Green
 Write-Host "  Draws:    Fair games: bot loses after 2-5 draws" -ForegroundColor White
 Write-Host "            Cheating games: bot wins after 3-4 draws" -ForegroundColor White
 

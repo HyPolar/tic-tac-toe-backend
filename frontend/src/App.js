@@ -234,43 +234,40 @@ export default function App() {
         setCurrentScreen('waiting');
         setMessage(message || 'Finding opponent...');
         
-        // Parse estimated wait time (e.g., "13-25 seconds")
-        if (estimatedWait) {
-          const match = estimatedWait.match(/(\d+)-(\d+)/);
-          if (match) {
-            const minWait = parseInt(match[1]);
-            const maxWait = parseInt(match[2]);
-            setWaitingInfo({ minWait, maxWait, estimatedWait });
-            // Start countdown from max wait time
-            setWaitingSecondsLeft(maxWait);
-            
-            if (waitingIntervalRef.current) { 
-              clearInterval(waitingIntervalRef.current); 
-            }
-            
-            const startTime = Date.now();
-            waitingIntervalRef.current = setInterval(() => {
-              const elapsed = Math.floor((Date.now() - startTime) / 1000);
-              const remaining = Math.max(0, maxWait - elapsed);
-              setWaitingSecondsLeft(remaining);
-            }, 1000);
-          }
-        } else {
-          setWaitingInfo(null);
-          setWaitingSecondsLeft(null);
+        // Set estimated wait time: 13-25 seconds
+        const minWait = 13;
+        const maxWait = 25;
+        setWaitingInfo({ minWait, maxWait, estimatedWait: '13-25 seconds' });
+        // Start countdown from max wait time
+        setWaitingSecondsLeft(maxWait);
+        
+        if (waitingIntervalRef.current) { 
+          clearInterval(waitingIntervalRef.current); 
         }
+        
+        const startTime = Date.now();
+        waitingIntervalRef.current = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startTime) / 1000);
+          const remaining = Math.max(0, maxWait - elapsed);
+          setWaitingSecondsLeft(remaining);
+        }, 1000);
+        
         setMatchInfo(null);
       },
       matchFound: ({ opponent, startsIn, startAt }) => {
-        // Switch to pre-game countdown
+        // Switch to pre-game countdown: "Opponent found, starting in 5..."
         if (waitingIntervalRef.current) { clearInterval(waitingIntervalRef.current); waitingIntervalRef.current = null; }
         setWaitingInfo(null);
-        setMatchInfo({ opponent, startsIn, startAt });
+        const countdownStart = Date.now() + 5000;
+        setMatchInfo({ opponent, startsIn: 5, startAt: countdownStart });
         setGameState('waiting');
-        setMessage('Opponent found! Starting soon...');
-        if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); matchIntervalRef.current = null; }
+        setMessage('Opponent found! Starting game in...');
+        
+        // Start countdown from 5
+        setMatchSecondsLeft(5);
+        if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); }
         const tick = () => {
-          const secs = Math.max(0, Math.ceil((Number(startAt) - Date.now()) / 1000));
+          const secs = Math.max(0, Math.ceil((countdownStart - Date.now()) / 1000));
           setMatchSecondsLeft(secs);
           // Clear interval when countdown reaches 0
           if (secs <= 0 && matchIntervalRef.current) {
@@ -445,15 +442,33 @@ export default function App() {
     setAddressLocked(true);
   };
 
-  // Autofill Lightning username from URL (#p_add=user@speed.app or ?p_add=)
+  // Auto-fetch Lightning address from Speed Wallet URL params
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    
+    // Speed Wallet passes p_add (Lightning address) or acct_id
     const pAdd = urlParams.get('p_add') || hashParams.get('p_add');
+    const acctId = urlParams.get('acct_id') || hashParams.get('acct_id');
+    const authToken = urlParams.get('auth_token') || hashParams.get('auth_token');
+    
+    // If Lightning address is provided directly, use it
     if (pAdd && !lightningAddress) {
       setLightningAddress(pAdd);
+      setAddressLocked(true);
+      console.log('Auto-filled Lightning address from URL:', pAdd);
     }
-  }, [lightningAddress]);
+    
+    // If acct_id or auth_token provided, fetch Lightning address from backend
+    if ((acctId || authToken) && !lightningAddress && socket && connected) {
+      if (acctId) {
+        setAcctId(acctId);
+      }
+      if (authToken) {
+        socket.emit('set_auth_token', { authToken });
+      }
+    }
+  }, [lightningAddress, socket, connected]);
 
   // Game timer for turn countdown
   useEffect(() => {

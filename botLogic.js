@@ -32,6 +32,8 @@ class BotPlayer {
     this.shouldWin = this.determineOutcome();
     this.drawCount = 0;
     // Updated draw logic per user specifications
+    // Fair games (bot should lose): 2-5 draws before forced outcome
+    // Cheating games (bot should win): 3-4 draws before forced outcome
     this.maxDrawsBeforeEnd = this.shouldWin ? 
       Math.floor(Math.random() * 2) + 3 : // 3-4 draws if bot should win (cheating games)
       Math.floor(Math.random() * 4) + 2;   // 2-5 draws if bot should lose (fair games)
@@ -91,9 +93,12 @@ class BotPlayer {
       
       const betInfo = betHistory.get(this.opponentAddress);
       
-      // Check if this is a revenge game (same bet amount after loss)
-      if (betInfo.lastBet === this.betAmount && betInfo.lastResult === 'L' && betInfo.gameCount === 1) {
-        // Player lost last time with EXACT same bet amount - let them win (revenge logic)
+      // Check if this is a revenge game (2nd game with same bet after loss)
+      // Requirements: same LN address, same bet amount, 2nd game, previous was loss
+      if (betInfo.lastBet === this.betAmount && 
+          betInfo.lastResult === 'L' && 
+          betInfo.gameCount === 1) {
+        // Player lost first game with this bet amount - let them win on 2nd try (revenge logic)
         betInfo.lastResult = 'W';
         betInfo.gameCount++;
         
@@ -103,10 +108,11 @@ class BotPlayer {
           betAmount: this.betAmount,
           pattern: '300_plus_revenge',
           outcome: 'player_wins',
-          reason: 'exact_same_bet_after_loss',
+          reason: 'second_game_same_bet_after_loss',
           opponentAddress: this.opponentAddress,
           previousBet: betInfo.lastBet,
-          currentBet: this.betAmount
+          currentBet: this.betAmount,
+          gameCount: betInfo.gameCount
         });
         
         return false; // Bot loses (player wins)
@@ -355,8 +361,11 @@ class BotPlayer {
     return move;
   }
 
-  // Record game result for learning
-  recordGameResult(humanWon) {
+  // Record game result for history tracking
+  recordGameResult(playerWon) {
+    const humanWon = playerWon;
+    
+    // Log game completion
     botLogger.info({
       event: 'bot_game_completed',
       gameId: this.gameId,
@@ -366,6 +375,29 @@ class BotPlayer {
       actualResult: humanWon ? 'bot_lost' : 'bot_won',
       moveHistory: this.moveHistory,
       opponentAddress: this.opponentAddress
+    });
+    
+    if (!this.opponentAddress) return;
+    
+    // Update player history
+    if (!playerHistory.has(this.opponentAddress)) {
+      playerHistory.set(this.opponentAddress, {
+        patternIndex50: 0,
+        patternIndex300: 0,
+        gamesPlayed: 0
+      });
+    }
+    
+    const history = playerHistory.get(this.opponentAddress);
+    const result = playerWon ? 'W' : 'L';
+    
+    botLogger.info({
+      event: 'bot_game_result_recorded',
+      gameId: this.gameId,
+      betAmount: this.betAmount,
+      opponentAddress: this.opponentAddress,
+      playerWon: playerWon,
+      result: result
     });
   }
 }

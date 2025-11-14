@@ -76,14 +76,13 @@ body {
 }
 /* Modern Panels */
 .panel {
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(20px);
-  border: 2px solid #000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 16px;
   padding: 2rem;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   animation: slideUp 0.4s ease-out;
-  color: #000 !important;
 }
 
 @keyframes slideUp {
@@ -182,10 +181,10 @@ input:focus, select:focus {
 /* Modern Buttons */
 button {
   padding: 14px 28px;
-  border: 2px solid #000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 12px;
-  background: #fff !important;
-  color: #000 !important;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
   font-weight: 500;
   font-size: 0.95rem;
   cursor: pointer;
@@ -194,7 +193,7 @@ button {
 }
 
 button:hover {
-  background: #f0f0f0 !important;
+  background: rgba(255, 255, 255, 0.2);
   transform: translateY(-2px);
   box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
 }
@@ -253,9 +252,9 @@ button:active {
   height: var(--cell-size); 
   font-size: clamp(32px, 10vw, 48px); 
   font-weight: 900; 
-  background:#fff !important; 
-  border:3px solid #000 !important; 
-  color:#000 !important; 
+  background: rgba(255, 255, 255, 0.1); 
+  border: 1px solid rgba(255, 255, 255, 0.3); 
+  color: #fff; 
   display:flex; 
   align-items:center; 
   justify-content:center; 
@@ -281,7 +280,7 @@ button:active {
 .status { 
   margin-top: 16px; 
   text-align:center; 
-  color:#000 !important; 
+  color: rgba(255, 255, 255, 0.9); 
   font-size: 18px;
   font-weight: 600;
 }
@@ -336,86 +335,22 @@ button:active {
   box-shadow: 0 0 0 3px rgba(0,0,0,0.2);
 }
 /* X / O colors */
-.cell.x { color:#000 !important; }
-.cell.o { color:#000 !important; }
+.cell.x { color: #ff6b6b; }
+.cell.o { color: #4ecdc4; }
 /* Add pop animation when placing X or O */
 .cell.x, .cell.o { 
   animation: pop 0.3s ease-out;
 }
 
-/* Force all game elements to be visible */
-.game-screen {
-  color: #000 !important;
-}
-
-.game-screen .panel {
-  background: #ffffff !important;
-  color: #000 !important;
-}
-
 .hud {
-  color: #000 !important;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .player-symbol {
-  color: #000 !important;
+  color: #fff;
   font-weight: bold;
 }
 
-/* Practice board visibility fixes */
-.practice-board .cell {
-  background: #ffffff !important;
-  border: 3px solid #000 !important;
-  color: #000 !important;
-  opacity: 1 !important;
-}
-
-/* Universal board cell visibility - overrides all themes */
-.board .cell,
-.neo-board .cell,
-.practice-board .cell {
-  background: #ffffff !important;
-  border: 3px solid #000 !important;
-  color: #000 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-}
-
-/* Ensure board container is visible */
-.board,
-.neo-board,
-.practice-board {
-  opacity: 1 !important;
-  visibility: visible !important;
-}
-
-.practice .panel {
-  background: #ffffff !important;
-  color: #000 !important;
-  opacity: 1 !important;
-}
-
-.practice-title {
-  color: #000 !important;
-  font-weight: bold;
-}
-
-.practice-header {
-  color: #000 !important;
-}
-
-.practice-footer {
-  color: #666 !important;
-}
-
-/* Force all main menu elements to be visible */
-.main-header h1 {
-  color: #fff !important;
-}
-
-.main-header .subtitle {
-  color: rgba(255, 255, 255, 0.8) !important;
-}
 @keyframes pop {
   0% { transform: scale(0); }
   50% { transform: scale(1.2); }
@@ -560,9 +495,9 @@ button[disabled] {
 /* Panels */
 .neo-panel { 
   border-radius: 12px; 
-  border: 2px solid #000 !important; 
-  background: #fff !important;
-  color: #000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.2); 
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 /* Glass effect removed for clean themes */
 
@@ -604,7 +539,7 @@ button[disabled] {
 .hud-left { justify-self: start; }
 .hud-center { justify-self: center; text-align:center; }
 .hud-right { justify-self: end; }
-.message-line { font-weight: 700; letter-spacing: .2px; color:#000 !important; }
+.message-line { font-weight: 700; letter-spacing: .2px; color: rgba(255, 255, 255, 0.9); }
 /* Timer ring - no special effects for clean themes */
 
 /* Board enhancements */
@@ -2851,48 +2786,3 @@ body.theme-pink {
   color: #fff !important;
 }
 
-/* CRITICAL VISIBILITY OVERRIDES - MUST BE LAST */
-/* Force all game boards to be fully visible */
-.board,
-.neo-board,
-.practice-board,
-.game-board {
-  opacity: 1 !important;
-  visibility: visible !important;
-}
-
-.board .cell,
-.neo-board .cell,
-.practice-board .cell,
-.game-board .cell,
-.cell {
-  background: #ffffff !important;
-  border: 3px solid #000 !important;
-  color: #000 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-}
-
-/* Force all panels to be visible */
-.panel,
-.neo-panel,
-.glass {
-  background: #ffffff !important;
-  color: #000 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  border: 2px solid #000 !important;
-}
-
-/* Force all game text to be visible */
-.status,
-.message-line,
-.practice-title,
-.practice-header,
-.hud,
-.game-screen,
-.player-symbol {
-  color: #000 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-}

@@ -1,15 +1,21 @@
+// =====================================================
+// TIC-TAC-TOE - LIGHTNING NETWORK EDITION
+// Full Speed Wallet Integration
+// =====================================================
+
 // Socket.io connection
-// Prefer environment variables in production. Fallback to localhost for dev.
-const SOCKET_BASE = (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOCKET_URL)
-  || (window?.location?.hostname === 'localhost' ? 'http://localhost:4000' : '');
-if (!SOCKET_BASE && window?.location?.hostname !== 'localhost') {
-  console.warn('No REACT_APP_SOCKET_URL configured. Set it in Vercel to your backend WebSocket URL (e.g., wss://<render-app>.onrender.com)');
-}
-const socket = io(SOCKET_BASE || 'http://localhost:4000', { transports: ['websocket'] });
+const SOCKET_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : '';
+const socket = io(SOCKET_BASE || 'http://localhost:4000', { 
+  transports: ['websocket'],
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5
+});
 
 // Game state
 let gameState = {
     gameId: null,
+    playerId: null,
     mySymbol: null,
     currentTurn: null,
     board: Array(9).fill(null),
@@ -19,10 +25,16 @@ let gameState = {
     authToken: null,
     turnTimer: null,
     timerInterval: null,
-    turnDeadline: null
+    turnDeadline: null,
+    waitingForPayment: false,
+    waitingForOpponent: false,
+    invoice: null,
+    hostedInvoiceUrl: null,
+    matchmakingStartTime: null,
+    acceptedTerms: localStorage.getItem('acceptedTerms') === 'true' || false
 };
 
-// DOM elements
+// DOM Elements
 const gameBoard = document.getElementById('gameBoard');
 const cells = document.querySelectorAll('.cell');
 const playBtn = document.getElementById('playBtn');
@@ -37,12 +49,129 @@ const statusMessage = document.getElementById('statusMessage');
 const payoutMessage = document.getElementById('payoutMessage');
 const turnTimer = document.getElementById('turnTimer');
 const timerValue = document.getElementById('timerValue');
-// New elements for wallet connection
 const speedUsernameInput = document.getElementById('speedUsername');
 const speedAuthTokenInput = document.getElementById('speedAuthToken');
 const fetchAddressBtn = document.getElementById('fetchAddressBtn');
-const useAddressBtn = document.getElementById('useAddressBtn');
 const lnAddressStatus = document.getElementById('lnAddressStatus');
+
+// Legal Content
+const legalContent = {
+  terms: getTermsHTML(),
+  privacy: getPrivacyHTML(),
+  howToPlay: getHowToPlayHTML()
+};
+
+function getTermsHTML() {
+  return `
+<h2 style="color: #00ffcc; text-align: center; margin-bottom: 20px;">⚖️ TERMS & CONDITIONS</h2>
+<div style="background: rgba(255, 0, 102, 0.1); border: 2px solid #ff0066; border-radius: 10px; padding: 15px; margin-bottom: 20px;">
+<p style="color: #ff0066; font-weight: bold; text-align: center; font-size: 1.1rem;">⚠️ BY PLAYING, YOU AGREE TO ALL TERMS ⚠️</p></div>
+<h3>1. Game Mechanics & Bots</h3>
+<p>The matchmaking system searches for human opponents (0-25s). If none found, automated bots join (13-25s). Bots simulate real players and may have varying skill levels. You acknowledge bot usage as an integral game feature.</p>
+<h3>2. Betting & Payments</h3>
+<p>All bets in Satoshis are non-refundable once placed. Payments via Lightning Network. Payouts sent instantly to your Lightning address. You're responsible for correct address entry. Platform fees included in payouts.</p>
+<h3>3. Turn Timers & Rules</h3>
+<p>First turn: 8 seconds. All other turns: 5 seconds. Failure to move = auto-forfeit. Draws = no payout, bets forfeited. Disconnection may result in forfeit.</p>
+<h3>4. Eligibility</h3>
+<p>Must be 18+ years old. Responsible for legal compliance in your jurisdiction. Maintain wallet security.</p>
+<h3>5. LIMITATION OF LIABILITY</h3>
+<p style="text-transform: uppercase; font-weight: bold;">THE GAME IS PROVIDED "AS IS" WITHOUT WARRANTIES. WE ARE NOT LIABLE FOR ANY LOSSES, DAMAGES, OR CRYPTOCURRENCY LOSSES. NO REFUNDS EXCEPT AT OUR SOLE DISCRETION.</p>
+<h3>6. Indemnification</h3>
+<p>You indemnify us from all claims, damages, losses arising from your use of the Game or Terms violations.</p>
+<h3>7. Modifications</h3>
+<p>We may modify Terms anytime without notice. Continued use = acceptance. We may terminate your access anytime without liability.</p>
+<div style="background: rgba(255, 0, 102, 0.1); border: 2px solid #ff0066; border-radius: 10px; padding: 15px; margin-top: 20px;">
+<p style="color: #ff0066; font-weight: bold; text-align: center;">⚠️ YOU CANNOT SUE US FOR ANY LOSSES OR DAMAGES ⚠️</p></div>`;
+}
+
+function getPrivacyHTML() {
+  return `
+<h2 style="color: #00ffcc; text-align: center; margin-bottom: 20px;">🔒 PRIVACY POLICY</h2>
+<h3>1. Information Collection</h3>
+<p>We collect: Lightning addresses, game activity, transaction data, IP addresses, device info, and authentication tokens (temporarily).</p>
+<h3>2. How We Use Data</h3>
+<p>For game operation, payment processing, fraud prevention, analytics, and legal compliance.</p>
+<h3>3. Data Sharing</h3>
+<p>Shared with payment providers (Speed Wallet), service providers, and as legally required. We don't sell your data.</p>
+<h3>4. Data Security</h3>
+<p>We use reasonable security measures but cannot guarantee 100% security. You're responsible for wallet security.</p>
+<h3>5. Your Rights</h3>
+<p>You can request access, correction, or deletion of your data. Some data retained for legal/business purposes.</p>
+<h3>6. Automated Systems</h3>
+<p>We use automated algorithms for matchmaking, bot matching, outcome determination, and fraud detection.</p>
+<div style="background: rgba(0, 255, 204, 0.1); border: 2px solid #00ffcc; border-radius: 10px; padding: 15px; margin-top: 20px;">
+<p style="color: #00ffcc; font-weight: bold; text-align: center;">By using the Game, you accept this Privacy Policy.</p></div>`;
+}
+
+function getHowToPlayHTML() {
+  return {
+    page1: `
+<h2 style="color: #ff0066; text-align: center; margin-bottom: 30px; font-size: 2rem;">😂 YOU DON'T KNOW TIC-TAC-TOE?!</h2>
+<div style="background: rgba(255, 0, 102, 0.1); border: 2px solid #ff0066; border-radius: 15px; padding: 25px; margin-bottom: 25px; text-align: center;">
+<p style="font-size: 1.3rem; margin-bottom: 15px;">Are you serious right now? 🤨</p>
+<p style="font-size: 1rem; color: #888; line-height: 1.6;">This is THE game that literally EVERY human learns before they learn their ABCs! The game grandmas play! The game from ancient Egypt!</p>
+<p style="font-size: 1.2rem; color: #ff0066; margin-top: 15px; font-weight: bold;">But hey... we won't judge... much. 😏</p>
+</div>
+<div style="background: #0a0a0f; border-radius: 15px; padding: 25px; margin-bottom: 25px;">
+<h3 style="color: #00ffcc; margin-bottom: 15px; text-align: center;">⚡ THE "EMBARRASSINGLY SIMPLE" VERSION:</h3>
+<p style="font-size: 1.1rem; line-height: 1.8; text-align: center; margin-bottom: 15px;">THREE. IN. A. ROW. That's it!</p>
+<p style="font-size: 0.95rem; color: #888; text-align: center;">You get X or O. Put 3 in a line - horizontal, vertical, or diagonal. First to get 3 wins. Done. 🎤</p>
+</div>
+<div style="background: rgba(0, 255, 204, 0.1); border: 2px solid #00ffcc; border-radius: 15px; padding: 25px;">
+<h3 style="color: #ffff00; margin-bottom: 15px; text-align: center; font-size: 1.3rem;">🤑 BUT HERE'S THE TWIST:</h3>
+<p style="font-size: 1.1rem; text-align: center; margin-bottom: 10px;">This isn't your grandma's game...</p>
+<p style="color: #00ffcc; font-size: 1.2rem; text-align: center; font-weight: bold;">YOU'RE PLAYING FOR REAL BITCOIN! ⚡💰</p>
+<p style="font-size: 0.9rem; color: #888; text-align: center; margin-top: 15px;">Maybe click "Next" to learn how payments work? Unless you enjoy donating Bitcoin! 🤷</p>
+</div>`,
+    page2: `
+<h2 style="color: #00ffcc; text-align: center; margin-bottom: 25px;">📋 GAME MECHANICS</h2>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #00ffcc;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">1. Choose Your Bet</h4>
+<p style="color: #888;">Select 50-10,000 sats. Higher bets = bigger payouts!</p>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #00ffcc;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">2. Connect Lightning Wallet</h4>
+<p style="color: #888;">Enter Speed Wallet username (becomes username@speed.app). Winnings sent instantly here!</p>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #00ffcc;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">3. Matchmaking</h4>
+<p style="color: #888;">System searches 0-25s for humans. If none found, bot joins at 13-25s. Estimated wait: 13-25 seconds.</p>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #00ffcc;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">4. Turn Timers</h4>
+<p style="color: #888;"><strong>FIRST TURN:</strong> 8 seconds | <strong>OTHER TURNS:</strong> 5 seconds<br><span style="color: #ff0066;">⚠️ No move = auto-forfeit!</span></p>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #00ffcc;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">5. Draw Rules</h4>
+<p style="color: #888;">If draw: opponent who went first last time goes first next game (5s timer). Draws = no payout, bets forfeited.</p>
+</div>`,
+    page3: `
+<h2 style="color: #00ffcc; text-align: center; margin-bottom: 25px;">💰 PAYMENTS & PAYOUTS</h2>
+<div style="background: rgba(0, 255, 204, 0.1); border: 2px solid #00ffcc; border-radius: 15px; padding: 20px; margin-bottom: 20px;">
+<h3 style="color: #00ffcc; margin-bottom: 12px; text-align: center;">⚡ Lightning Network</h3>
+<p style="line-height: 1.8;">All payments via Bitcoin Lightning Network:</p>
+<ul style="color: #888; margin-top: 12px; line-height: 1.8; list-style-position: inside;">
+<li>✅ Instant transactions</li>
+<li>✅ Ultra-low fees</li>
+<li>✅ Global access</li>
+<li>✅ Real Bitcoin</li>
+</ul>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">💸 How Betting Works</h4>
+<p style="color: #888; margin-bottom: 10px;">Click "Find Opponent" → Get Lightning invoice → Pay with any LN wallet → Game starts!</p>
+<p style="color: #ff0066;">⚠️ <strong>Bets are NON-REFUNDABLE</strong> once game starts!</p>
+</div>
+<div style="background: #0a0a0f; border-radius: 10px; padding: 20px; margin-bottom: 15px;">
+<h4 style="color: #00ffcc; margin-bottom: 10px;">💰 Receiving Winnings</h4>
+<p style="color: #888; margin-bottom: 10px;">Win → Payout sent INSTANTLY to your Lightning address! Appears in wallet within seconds.</p>
+<p style="background: rgba(0, 255, 204, 0.1); padding: 10px; border-radius: 8px; border-left: 4px solid #00ffcc; color: #888;">💡 <strong>PRO TIP:</strong> Double-check your Lightning address! Wrong address = lost Bitcoin forever.</p>
+</div>
+<div style="background: rgba(255, 0, 102, 0.1); border: 2px solid #ff0066; border-radius: 10px; padding: 15px;">
+<p style="color: #ff0066; font-weight: bold; text-align: center;">⚠️ NEVER SHARE YOUR AUTH TOKEN WITH ANYONE!</p>
+</div>`
+  };
+}
 
 // Initialize particles
 function createParticles() {
