@@ -1795,13 +1795,15 @@ app.post('/webhook', express.json(), (req, res) => {
             game.startTurnTimer();
             const turnDeadline = game.turnDeadlineAt || null;
             
-            // Store game-player mapping for reconnection
+            // Store game-player mapping for reconnection and ensure sockets are in room
             playerIds.forEach(pid => {
               const player = game.players[pid];
               if (player && player.lightningAddress) {
                 // Store mapping of Lightning address to game for reconnection
                 const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
                 if (playerSock && playerSock.connected) {
+                  // Ensure socket is in the game room for broadcasts
+                  playerSock.join(game.id);
                   playerSock.gameId = game.id;
                   playerSock.playerIdInGame = pid;
                   playerSock.emit('startGame', {
@@ -1812,7 +1814,7 @@ app.post('/webhook', express.json(), (req, res) => {
                     message: game.turn === pid ? 'Your move' : "Opponent's move",
                     turnDeadline
                   });
-                  console.log(`Sent startGame to player ${pid}`);
+                  console.log(`Sent startGame to player ${pid} and joined room ${game.id}`);
                 } else {
                   console.log(`Player ${pid} socket not connected for game start`);
                 }
@@ -1894,6 +1896,8 @@ app.post('/webhook', express.json(), (req, res) => {
                     if (!currentGame.players[pid].isBot) {
                       const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
                       if (playerSock && playerSock.connected) {
+                        // Ensure socket is in the game room for broadcasts
+                        playerSock.join(currentGame.id);
                         playerSock.emit('startGame', {
                           gameId: currentGame.id,
                           symbol: currentGame.players[pid].symbol,
@@ -1902,7 +1906,7 @@ app.post('/webhook', express.json(), (req, res) => {
                           message: currentGame.turn === pid ? 'Your move' : "Opponent's move",
                           turnDeadline
                         });
-                        console.log(`Sent startGame to human player ${pid} in bot game`);
+                        console.log(`Sent startGame to human player ${pid} in bot game and joined room ${currentGame.id}`);
                       } else {
                         console.log(`Human player ${pid} disconnected before bot game start`);
                       }
@@ -2105,14 +2109,18 @@ function attemptMatchOrEnqueue(socketId) {
       
       playerIds.forEach(pid => {
         const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-        playerSock?.emit('startGame', {
-          gameId: game.id,
-          symbol: game.players[pid].symbol,
-          turn: game.turn,
-          board: game.board,
-          message: game.turn === pid ? 'Your move' : "Opponent's move",
-          turnDeadline
-        });
+        if (playerSock && playerSock.connected) {
+          // Ensure socket is in the game room for broadcasts
+          playerSock.join(game.id);
+          playerSock.emit('startGame', {
+            gameId: game.id,
+            symbol: game.players[pid].symbol,
+            turn: game.turn,
+            board: game.board,
+            message: game.turn === pid ? 'Your move' : "Opponent's move",
+            turnDeadline
+          });
+        }
       });
     }, startsIn * 1000);
   } else {
@@ -2147,44 +2155,63 @@ function attemptMatchOrEnqueue(socketId) {
       games[gameId] = game;
 
       const s = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
-      s?.join(gameId);
+      if (s && s.connected) {
+        s.join(gameId);
+        console.log(`Player ${socketId} joined game room ${gameId}`);
 
-      const startsIn = 5;
-      const startAt = Date.now() + startsIn * 1000;
-      s?.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
+        const startsIn = 5;
+        const startAt = Date.now() + startsIn * 1000;
+        s.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
 
-      setTimeout(() => {
-        game.status = 'playing';
-        game.startTurnTimer();
-        const turnDeadline = game.turnDeadlineAt || null;
-        s?.emit('startGame', {
-          gameId,
-          symbol: game.players[socketId].symbol,
-          turn: game.turn,
-          board: game.board,
-          message: game.turn === socketId ? 'Your move' : "Opponent's move",
-          turnDeadline
-        });
-
-        if (game.turn === botId) {
-          const bot = activeBots.get(gameId);
-          if (bot) {
-            setTimeout(() => {
-              const moveCount = game.board.filter(cell => cell !== null).length;
-              const move = bot.getNextMove(game.board, moveCount);
-              if (move !== null) {
-                const result = game.makeMove(botId, move);
-                io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-                if (result.winner) {
-                  handleGameEnd(gameId, result.winner);
-                } else if (result.draw) {
-                  handleDraw(gameId);
-                }
-              }
-            }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
+        setTimeout(() => {
+          game.status = 'playing';
+          game.startTurnTimer();
+          const turnDeadline = game.turnDeadlineAt || null;
+          // Ensure socket is still in room
+          if (s.connected) {
+            s.join(gameId);
           }
-        }
-      }, startsIn * 1000);
+          s.emit('startGame', {
+            gameId,
+            symbol: game.players[socketId].symbol,
+            turn: game.turn,
+            board: game.board,
+            message: game.turn === socketId ? 'Your move' : "Opponent's move",
+            turnDeadline
+          });
+
+          if (game.turn === botId) {
+            const bot = activeBots.get(gameId);
+            if (bot) {
+              setTimeout(() => {
+                const moveCount = game.board.filter(cell => cell !== null).length;
+                const move = bot.getNextMove(game.board, moveCount);
+                if (move !== null) {
+                  const result = game.makeMove(botId, move);
+                  // Get human player ID for message
+                  const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
+                  // Broadcast move to ALL players in the game room
+                  io.to(gameId).emit('moveMade', {
+                    position: move,
+                    symbol: game.players[botId].symbol,
+                    nextTurn: game.turn,
+                    board: game.board,
+                    turnDeadline: game.turnDeadlineAt,
+                    message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
+                  });
+                  // Also emit boardUpdate for backwards compatibility
+                  io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
+                  if (result.winner) {
+                    handleGameEnd(gameId, result.winner);
+                  } else if (result.draw) {
+                    handleDraw(gameId);
+                  }
+                }
+              }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
+            }
+          }
+        }, startsIn * 1000);
+      }
 
       delete botSpawnTimers[socketId];
     }, delay);
@@ -2740,6 +2767,8 @@ function handleDraw(gameId) {
     if (player && player.lightningAddress) {
       const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
       if (playerSock && playerSock.connected) {
+        // Ensure socket is in the game room for broadcasts
+        playerSock.join(game.id);
         // First emit draw notification
         playerSock.emit('gameEnd', { 
           message: "It's a draw! New game starting...",
@@ -2750,6 +2779,10 @@ function handleDraw(gameId) {
         
         // Then immediately start new game
         setTimeout(() => {
+          // Ensure socket is still in room
+          if (playerSock.connected) {
+            playerSock.join(game.id);
+          }
           playerSock.emit('startGame', {
             gameId: game.id,
             symbol: game.players[pid].symbol,
