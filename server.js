@@ -2188,23 +2188,27 @@ function attemptMatchOrEnqueue(socketId) {
                 const move = bot.getNextMove(game.board, moveCount);
                 if (move !== null) {
                   const result = game.makeMove(botId, move);
-                  // Get human player ID for message
-                  const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
-                  // Broadcast move to ALL players in the game room
-                  io.to(gameId).emit('moveMade', {
-                    position: move,
-                    symbol: game.players[botId].symbol,
-                    nextTurn: game.turn,
-                    board: game.board,
-                    turnDeadline: game.turnDeadlineAt,
-                    message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
-                  });
-                  // Also emit boardUpdate for backwards compatibility
-                  io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-                  if (result.winner) {
-                    handleGameEnd(gameId, result.winner);
-                  } else if (result.draw) {
-                    handleDraw(gameId);
+                  if (result.ok) {
+                    console.log(`Bot ${botId} made initial move ${move}, board:`, game.board);
+                    // Get human player ID for message
+                    const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
+                    // Broadcast move to ALL players in the game room (using game room ensures delivery)
+                    io.to(gameId).emit('moveMade', {
+                      position: move,
+                      symbol: game.players[botId].symbol,
+                      nextTurn: game.turn,
+                      board: game.board,
+                      turnDeadline: game.turnDeadlineAt,
+                      message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
+                    });
+                    // Also emit boardUpdate for backwards compatibility
+                    io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
+                    console.log(`Emitted bot initial move to game room ${gameId}, move: ${move}, symbol: ${game.players[botId].symbol}`);
+                    if (result.winner) {
+                      handleGameEnd(gameId, result.winner);
+                    } else if (result.draw) {
+                      handleDraw(gameId);
+                    }
                   }
                 }
               }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
@@ -2250,14 +2254,26 @@ function makeBotMove(gameId, botId) {
       const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
       
       // Broadcast move to ALL players in the game room (using game room ensures delivery)
-      io.to(gameId).emit('moveMade', {
+      // Use both room-based and direct socket emission to ensure delivery
+      const humanPlayerSocket = Object.keys(game.players).find(pid => !game.players[pid].isBot);
+      const humanSock = humanPlayerSocket ? (io.sockets.sockets.get ? io.sockets.sockets.get(humanPlayerSocket) : io.sockets.sockets[humanPlayerSocket]) : null;
+      
+      const moveData = {
         position: move,
         symbol: game.players[botId].symbol,
         nextTurn: game.turn,
         board: game.board,
         turnDeadline: game.turnDeadlineAt,
         message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
-      });
+      };
+      
+      // Emit to room (primary method)
+      io.to(gameId).emit('moveMade', moveData);
+      
+      // Also emit directly to human player socket as backup
+      if (humanSock && humanSock.connected) {
+        humanSock.emit('moveMade', moveData);
+      }
       
       // Also emit boardUpdate for backwards compatibility
       io.to(gameId).emit('boardUpdate', {
@@ -2265,7 +2281,7 @@ function makeBotMove(gameId, botId) {
         lastMove: move
       });
       
-      console.log(`Emitted bot move to game room ${gameId}, move: ${move}, symbol: ${game.players[botId].symbol}`);
+      console.log(`Emitted bot move to game room ${gameId}, move: ${move}, symbol: ${game.players[botId].symbol}, humanSocket: ${humanPlayerSocket}`);
       
       // Check for game end
       if (result.winner) {
@@ -2526,15 +2542,25 @@ io.on('connection', (socket) => {
     // Get human player ID for message
     const otherPlayerId = Object.keys(game.players).find(pid => pid !== playerIdInGame && !game.players[pid].isBot);
     
-    // Broadcast move to ALL players in the game room
-    io.to(game.id).emit('moveMade', {
+    const moveData = {
       position,
       symbol: game.players[playerIdInGame].symbol,
       nextTurn: game.turn,
       board: game.board,
       turnDeadline: game.turnDeadlineAt,
       message: game.turn === otherPlayerId ? 'Your move' : "Opponent's move"
-    });
+    };
+    
+    // Broadcast move to ALL players in the game room (primary method)
+    io.to(game.id).emit('moveMade', moveData);
+    
+    // Also emit directly to other player socket as backup (if it's a human player)
+    if (otherPlayerId && !game.players[otherPlayerId]?.isBot) {
+      const otherSock = io.sockets.sockets.get ? io.sockets.sockets.get(otherPlayerId) : io.sockets.sockets[otherPlayerId];
+      if (otherSock && otherSock.connected) {
+        otherSock.emit('moveMade', moveData);
+      }
+    }
     
     // Also emit boardUpdate for backwards compatibility
     io.to(game.id).emit('boardUpdate', {
@@ -2542,7 +2568,7 @@ io.on('connection', (socket) => {
       lastMove: position
     });
     
-    console.log(`Emitted player move to game room ${game.id}, move: ${position}, symbol: ${game.players[playerIdInGame].symbol}`);
+    console.log(`Emitted player move to game room ${game.id}, move: ${position}, symbol: ${game.players[playerIdInGame].symbol}, nextTurn: ${game.turn}`);
 
     if (result.winner) {
       handleGameEnd(gameId, result.winner, result.winLine);
