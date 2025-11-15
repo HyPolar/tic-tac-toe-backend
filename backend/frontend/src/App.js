@@ -278,7 +278,7 @@ export default function App() {
         tick();
         matchIntervalRef.current = setInterval(tick, 250);
       },
-      startGame: ({ gameId, symbol, turn, message, turnDeadline }) => {
+      startGame: ({ gameId, symbol, turn, board, message, turnDeadline }) => {
         // Clear waiting/match timers on actual game start
         if (waitingIntervalRef.current) { clearInterval(waitingIntervalRef.current); waitingIntervalRef.current = null; }
         if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); matchIntervalRef.current = null; }
@@ -289,7 +289,9 @@ export default function App() {
         setGameId(gameId);
         setSymbol(symbol);
         setTurn(turn);
-        setBoard(Array(9).fill(null));
+        // Force board reset with new array reference (use server board if provided)
+        const newBoard = board && Array.isArray(board) ? [...board] : Array(9).fill(null);
+        setBoard(newBoard);
         setLastMove(null);
         setWinningLine(null);
         setTurnDeadline(turnDeadline || null);
@@ -301,11 +303,15 @@ export default function App() {
         setMessage(message || (turn === s.id ? 'Your move' : "Opponent's move"));
       },
       boardUpdate: ({ board, lastMove }) => {
-        setBoard(board);
+        // Force immediate board update
+        setBoard([...board]);
         setLastMove(typeof lastMove === 'number' ? lastMove : null);
       },
       moveMade: ({ position, symbol, nextTurn, board, turnDeadline, message }) => {
-        setBoard(board);
+        // Force immediate board update - don't rely on same reference
+        if (board && Array.isArray(board)) {
+          setBoard([...board]);
+        }
         setLastMove(position);
         setTurn(nextTurn);
         setTurnDeadline(turnDeadline || null);
@@ -591,7 +597,7 @@ export default function App() {
     }
     
     if (confirm('Are you sure you want to resign? You will lose the game.')) {
-      socket.emit('resignGame', { gameId });
+      socket.emit('resign', { gameId });
       setMessage('You resigned from the game');
     }
   };

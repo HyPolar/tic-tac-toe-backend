@@ -279,6 +279,7 @@ export default function App() {
         matchIntervalRef.current = setInterval(tick, 250);
       },
       startGame: ({ gameId, symbol, turn, board, message, turnDeadline }) => {
+        console.log('startGame event received:', { gameId, symbol, turn, board, message });
         // Clear waiting/match timers on actual game start
         if (waitingIntervalRef.current) { clearInterval(waitingIntervalRef.current); waitingIntervalRef.current = null; }
         if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); matchIntervalRef.current = null; }
@@ -289,7 +290,9 @@ export default function App() {
         setGameId(gameId);
         setSymbol(symbol);
         setTurn(turn);
-        setBoard(board || Array(9).fill(null));
+        // Force board reset with new array reference
+        const newBoard = board && Array.isArray(board) ? [...board] : Array(9).fill(null);
+        setBoard(newBoard);
         setLastMove(null);
         setWinningLine(null);
         setTurnDeadline(turnDeadline || null);
@@ -301,11 +304,18 @@ export default function App() {
         setMessage(message || (turn === s.id ? 'Your move' : "Opponent's move"));
       },
       boardUpdate: ({ board, lastMove }) => {
-        setBoard(board);
+        // Force immediate board update
+        console.log('boardUpdate event received:', { board, lastMove });
+        setBoard([...board]); // Create new array to force React re-render
         setLastMove(typeof lastMove === 'number' ? lastMove : null);
       },
       moveMade: ({ position, symbol, nextTurn, board, turnDeadline, message }) => {
-        setBoard(board);
+        // Force immediate board update - don't wait for any conditions
+        console.log('moveMade event received:', { position, symbol, nextTurn, board, message });
+        // Always update board immediately when move is received
+        if (board && Array.isArray(board)) {
+          setBoard([...board]); // Create new array to force React re-render
+        }
         setLastMove(position);
         setTurn(nextTurn);
         setTurnDeadline(turnDeadline || null);
@@ -338,8 +348,15 @@ export default function App() {
         // If autoContinue is true (draw with automatic new game), don't set to finished
         // Just show the message and wait for startGame event
         if (autoContinue && isDraw) {
+          console.log('Draw detected with autoContinue, clearing board and waiting for startGame');
           setMessage(message);
           setWinningLine(null);
+          // Clear the board immediately to avoid showing stale data
+          setBoard(Array(9).fill(null));
+          setLastMove(null);
+          setTurn(null);
+          setTurnDeadline(null);
+          setTimeLeft(null);
           // Don't set gameState to 'finished' - keep it playing so startGame can reset it
           // The startGame event will reset everything properly
           return; // Exit early, startGame will handle the reset
@@ -603,7 +620,7 @@ export default function App() {
     }
     
     if (confirm('Are you sure you want to resign? You will lose the game.')) {
-      socket.emit('resignGame', { gameId });
+      socket.emit('resign', { gameId });
       setMessage('You resigned from the game');
     }
   };

@@ -2483,24 +2483,38 @@ io.on('connection', (socket) => {
       return socket.emit('error', { message: errorMsg });
     }
 
-    // Emit move to all human players
-    Object.keys(game.players).forEach(pid => {
-      if (!game.players[pid].isBot) {
-        const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-        sock?.emit('moveMade', {
-          position,
-          symbol: game.players[playerIdInGame].symbol,
-          nextTurn: game.turn,
-          board: game.board,
-          turnDeadline: game.turnDeadlineAt
-        });
+    console.log(`Player ${playerIdInGame} made move ${position}, board:`, game.board);
+    
+    // Get human player ID for message
+    const otherPlayerId = Object.keys(game.players).find(pid => pid !== playerIdInGame && !game.players[pid].isBot);
+    
+    const moveData = {
+      position,
+      symbol: game.players[playerIdInGame].symbol,
+      nextTurn: game.turn,
+      board: game.board,
+      turnDeadline: game.turnDeadlineAt,
+      message: game.turn === otherPlayerId ? 'Your move' : "Opponent's move"
+    };
+    
+    // Broadcast move to ALL players in the game room (primary method)
+    io.to(game.id).emit('moveMade', moveData);
+    
+    // Also emit directly to other player socket as backup (if it's a human player)
+    if (otherPlayerId && !game.players[otherPlayerId]?.isBot) {
+      const otherSock = io.sockets.sockets.get ? io.sockets.sockets.get(otherPlayerId) : io.sockets.sockets[otherPlayerId];
+      if (otherSock && otherSock.connected) {
+        otherSock.emit('moveMade', moveData);
       }
-    });
-    // Backwards compatibility for legacy clients
+    }
+    
+    // Also emit boardUpdate for backwards compatibility
     io.to(game.id).emit('boardUpdate', {
       board: game.board,
       lastMove: position
     });
+    
+    console.log(`Emitted player move to game room ${game.id}, move: ${position}, symbol: ${game.players[playerIdInGame].symbol}, nextTurn: ${game.turn}`);
 
     if (result.winner) {
       handleGameEnd(gameId, result.winner, result.winLine);
@@ -2690,18 +2704,79 @@ function handleGameEnd(gameId, winnerId) {
 function handleDraw(gameId) {
   const game = games[gameId];
   if (!game) return;
-  game.status = 'finished';
-  game.clearTurnTimer();
-  
   // Track draw for human players (counted as loss in patterns)
   const humanPlayer = Object.values(game.players).find(p => !p.isBot);
   if (humanPlayer) {
     updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, false);
     console.log(`Updated history for ${humanPlayer.lightningAddress}: Draw (counted as loss) with ${game.betAmount} sats`);
   }
-  
-  io.to(gameId).emit('gameEnd', { result: 'draw' });
-  delete games[gameId];
+
+  // Switch starting player for next game (other player goes first)
+  const playerIds = Object.keys(game.players);
+  const otherPlayer = playerIds.find(id => id !== game.startingPlayer);
+  game.startingPlayer = otherPlayer || game.startingPlayer;
+
+  // Reset the board and game state for automatic continuation
+  game.board = Array(9).fill(null);
+  game.status = 'playing';
+  game.winner = null;
+  game.winLine = [];
+  game.moveCount = 0;
+  game.isFirstTurn = true;
+  game.turn = game.startingPlayer;
+  game.clearTurnTimer();
+
+  // Start the turn timer for the new starting player
+  game.startTurnTimer();
+
+  // Emit draw notification and new game start to all players
+  const turnDeadline = game.turnDeadlineAt;
+  const playerIdsList = Object.keys(game.players);
+
+  playerIdsList.forEach(pid => {
+    const player = game.players[pid];
+    if (player && player.lightningAddress) {
+      const playerSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
+      if (playerSock && playerSock.connected) {
+        // Ensure socket is in the game room for broadcasts
+        playerSock.join(game.id);
+        // First emit draw notification
+        playerSock.emit('gameEnd', { 
+          message: "It's a draw! New game starting...",
+          winnerSymbol: null,
+          winningLine: null,
+          autoContinue: true
+        });
+
+        // Then immediately start new game
+        setTimeout(() => {
+          if (playerSock.connected) {
+            playerSock.join(game.id);
+          }
+          playerSock.emit('startGame', {
+            gameId: game.id,
+            symbol: game.players[pid].symbol,
+            turn: game.turn,
+            board: game.board,
+            message: game.turn === pid ? 'Your move' : "Opponent's move",
+            turnDeadline: turnDeadline
+          });
+        }, 1000);
+      }
+    }
+  });
+
+  // If it's a bot's turn after reset, make the bot move
+  const botId = Object.keys(game.players).find(id => game.players[id].isBot);
+  if (botId && game.turn === botId) {
+    setTimeout(() => {
+      if (games[gameId] && games[gameId].status === 'playing' && games[gameId].turn === botId) {
+        makeBotMove(gameId, botId);
+      }
+    }, 1500);
+  }
+
+  console.log(`Draw handled for game ${gameId}, new game started with ${game.startingPlayer} going first`);
 }
 
 // Keep-alive mechanism to prevent server shutdown
