@@ -2922,3 +2922,15 @@ setInterval(() => {
 }, 300000); // Every 5 minutes
 
 console.log('🛡️ Enhanced error handling and monitoring active!');
+
+// External keep-alive ping to prevent Render idle cold starts
+const SELF_PING_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_PING_URL || null;
+if (SELF_PING_URL) {
+  const ping = () => {
+    const base = SELF_PING_URL.endsWith('/') ? SELF_PING_URL.slice(0, -1) : SELF_PING_URL;
+    const url = `${base}/health`;
+    httpClient.get(url, { timeout: 4000 }).catch(() => {});
+  };
+  setInterval(ping, 240000);
+  setTimeout(ping, 5000);
+}
