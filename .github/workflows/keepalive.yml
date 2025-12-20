@@ -8,14 +8,16 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      URL: ${{ secrets.KEEPALIVE_URL }}
     steps:
-      - name: Ping Render /health
-        env:
-          URL: ${{ secrets.KEEPALIVE_URL }}
+      - name: Skip when not configured (no failures, no spam)
+        if: ${{ env.URL == '' }}
         run: |
-          if [ -z "$URL" ]; then
-            echo "KEEPALIVE_URL secret not set. Please add it in the repo Settings > Secrets and variables > Actions";
-            exit 1;
-          fi
+          echo "KEEPALIVE_URL not set. Skipping keepalive ping."
+      - name: Ping Render /health
+        if: ${{ env.URL != '' }}
+        run: |
           echo "Pinging $URL"
           curl -fsS "$URL" || true
