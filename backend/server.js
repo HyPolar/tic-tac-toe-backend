@@ -2158,23 +2158,11 @@ function attemptMatchOrEnqueue(socketId) {
           turnDeadline
         });
 
+        // If the bot starts, delegate its first move to the shared helper
+        // so it emits a full moveMade event (with board + turnDeadline)
+        // just like all subsequent bot moves.
         if (game.turn === botId) {
-          const bot = activeBots.get(gameId);
-          if (bot) {
-            setTimeout(() => {
-              const moveCount = game.board.filter(cell => cell !== null).length;
-              const move = bot.getNextMove(game.board, moveCount);
-              if (move !== null) {
-                const result = game.makeMove(botId, move);
-                io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-                if (result.winner) {
-                  handleGameEnd(gameId, result.winner);
-                } else if (result.draw) {
-                  handleDraw(gameId);
-                }
-              }
-            }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
-          }
+          makeBotMove(gameId, botId);
         }
       }, startsIn * 1000);
 

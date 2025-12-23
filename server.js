@@ -2155,67 +2155,32 @@ function attemptMatchOrEnqueue(socketId) {
       games[gameId] = game;
 
       const s = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
-      if (s && s.connected) {
-        s.join(gameId);
-        console.log(`Player ${socketId} joined game room ${gameId}`);
+      s?.join(gameId);
 
-        const startsIn = 5;
-        const startAt = Date.now() + startsIn * 1000;
-        s.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
+      const startsIn = 5;
+      const startAt = Date.now() + startsIn * 1000;
+      s?.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
 
-        setTimeout(() => {
-          game.status = 'playing';
-          game.startTurnTimer();
-          const turnDeadline = game.turnDeadlineAt || null;
-          // Ensure socket is still in room
-          if (s.connected) {
-            s.join(gameId);
-          }
-          s.emit('startGame', {
-            gameId,
-            symbol: game.players[socketId].symbol,
-            turn: game.turn,
-            board: game.board,
-            message: game.turn === socketId ? 'Your move' : "Opponent's move",
-            turnDeadline
-          });
+      setTimeout(() => {
+        game.status = 'playing';
+        game.startTurnTimer();
+        const turnDeadline = game.turnDeadlineAt || null;
+        s?.emit('startGame', {
+          gameId,
+          symbol: game.players[socketId].symbol,
+          turn: game.turn,
+          board: game.board,
+          message: game.turn === socketId ? 'Your move' : "Opponent's move",
+          turnDeadline
+        });
 
-          if (game.turn === botId) {
-            const bot = activeBots.get(gameId);
-            if (bot) {
-              setTimeout(() => {
-                const moveCount = game.board.filter(cell => cell !== null).length;
-                const move = bot.getNextMove(game.board, moveCount);
-                if (move !== null) {
-                  const result = game.makeMove(botId, move);
-                  if (result.ok) {
-                    console.log(`Bot ${botId} made initial move ${move}, board:`, game.board);
-                    // Get human player ID for message
-                    const humanPlayerId = Object.keys(game.players).find(pid => !game.players[pid].isBot);
-                    // Broadcast move to ALL players in the game room (using game room ensures delivery)
-                    io.to(gameId).emit('moveMade', {
-                      position: move,
-                      symbol: game.players[botId].symbol,
-                      nextTurn: game.turn,
-                      board: game.board,
-                      turnDeadline: game.turnDeadlineAt,
-                      message: game.turn === humanPlayerId ? 'Your move' : "Opponent's move"
-                    });
-                    // Also emit boardUpdate for backwards compatibility
-                    io.to(gameId).emit('boardUpdate', { board: game.board, lastMove: move });
-                    console.log(`Emitted bot initial move to game room ${gameId}, move: ${move}, symbol: ${game.players[botId].symbol}`);
-                    if (result.winner) {
-                      handleGameEnd(gameId, result.winner);
-                    } else if (result.draw) {
-                      handleDraw(gameId);
-                    }
-                  }
-                }
-              }, bot.thinkingTime || (BOT_THINK_TIME.min + Math.random() * (BOT_THINK_TIME.max - BOT_THINK_TIME.min)));
-            }
-          }
-        }, startsIn * 1000);
-      }
+        // If the bot starts, delegate its first move to the shared helper
+        // so it emits a full moveMade event (with board + turnDeadline)
+        // just like all subsequent bot moves.
+        if (game.turn === botId) {
+          makeBotMove(gameId, botId);
+        }
+      }, startsIn * 1000);
 
       delete botSpawnTimers[socketId];
     }, delay);

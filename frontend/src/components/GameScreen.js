@@ -61,7 +61,7 @@ export default function GameScreen({
             <span className="message-line">{message}</span>
           </div>
           <div className="hud-right">
-            {isPlaying && typeof timeLeft === 'number' && typeof turnDuration === 'number' ? (
+            {isPlaying && isMyTurn && typeof timeLeft === 'number' && typeof turnDuration === 'number' ? (
               <div className="turn-timer" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <TimerRing progress={turnProgress} size={48} />
                 <span className="countdown" aria-live="polite">{timeLeft}s</span>
