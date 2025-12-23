@@ -30,6 +30,8 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState('menu'); // 'menu', 'start', 'payment', 'waiting', 'game'
   const [socket, setSocket] = useState(null);
   const [socketId, setSocketId] = useState(null);
+  // Track live gameState inside socket event handlers created once
+  const gameStateRef = useRef('menu');
 
   const [betAmount, setBetAmount] = useState(() => localStorage.getItem('ttt_lastBet') || '50');
   const [payoutAmount, setPayoutAmount] = useState(() => {
@@ -82,7 +84,8 @@ export default function App() {
   // Calculate turn progress for timer visualization
   const turnProgress = useMemo(() => {
     if (!turnDuration || !timeLeft) return 0;
-    return ((turnDuration - timeLeft) / turnDuration) * 100;
+    // Return a 0..1 fraction; the visual component clamps to [0,1]
+    return (turnDuration - timeLeft) / turnDuration;
   }, [turnDuration, timeLeft]);
   const [waitingInfo, setWaitingInfo] = useState(null); // { minWait, maxWait, estWaitSeconds, spawnAt }
   const waitingIntervalRef = useRef(null);
@@ -118,6 +121,15 @@ export default function App() {
   }, [history]);
 
   useEffect(() => {
+    fetch(`${BACKEND_URL}/health`).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    // keep ref in sync for handlers
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
     const s = io(BACKEND_URL, { transports: ['websocket', 'polling'] });
     setSocket(s);
 
@@ -136,6 +148,11 @@ export default function App() {
       },
       error: (payload) => {
         const msg = typeof payload === 'string' ? payload : (payload?.message || 'Error');
+        // Suppress noisy errors during/after a game that can be caused by late clicks/race conditions
+        if ((msg === 'Game not started' || msg === 'Game not found' || msg === 'Invalid move' || msg === 'Game already finished')
+            && (gameStateRef.current === 'playing' || gameStateRef.current === 'finished')) {
+          return;
+        }
         setMessage(msg);
       },
       paymentRequest: async ({ lightningInvoice, hostedInvoiceUrl, amountSats, amountUSD, invoiceId, speedInterfaceUrl }) => {

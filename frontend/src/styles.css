@@ -365,7 +365,8 @@ button:active {
   transform: scale(0.95);
 }
 .cell:disabled { 
-  opacity:0.6; 
+  /* Keep cells fully visible even when disabled so opponent moves are clearly visible */
+  opacity:1; 
   cursor:not-allowed; 
 }
 button[disabled] { 

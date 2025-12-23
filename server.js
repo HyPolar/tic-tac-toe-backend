@@ -2530,10 +2530,19 @@ io.on('connection', (socket) => {
 
     const result = game.makeMove(playerIdInGame, position);
     if (!result.ok) {
-      const errorMsg = result.reason === 'not_playing' ? 'Game not started' :
-                       result.reason === 'not_your_turn' ? 'Not your turn' :
-                       result.reason === 'bad_pos' ? 'Invalid position' :
-                       result.reason === 'occupied' ? 'Position already taken' : 'Invalid move';
+      // Provide clearer feedback: if the game is finished, say so instead of "not started"
+      let errorMsg;
+      if (result.reason === 'not_playing') {
+        errorMsg = game.status === 'finished' ? 'Game already finished' : 'Game not started';
+      } else if (result.reason === 'not_your_turn') {
+        errorMsg = 'Not your turn';
+      } else if (result.reason === 'bad_pos') {
+        errorMsg = 'Invalid position';
+      } else if (result.reason === 'occupied') {
+        errorMsg = 'Position already taken';
+      } else {
+        errorMsg = 'Invalid move';
+      }
       return socket.emit('error', { message: errorMsg });
     }
 
