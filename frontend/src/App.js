@@ -84,7 +84,8 @@ export default function App() {
 
   // Calculate turn progress for timer visualization
   const turnProgress = useMemo(() => {
-    if (!turnDuration || !timeLeft) return 0;
+    if (typeof turnDuration !== 'number' || typeof timeLeft !== 'number') return 0;
+    if (turnDuration <= 0) return 0;
     // Return a 0..1 fraction; the visual component clamps to [0,1]
     return (turnDuration - timeLeft) / turnDuration;
   }, [turnDuration, timeLeft]);

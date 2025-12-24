@@ -905,19 +905,50 @@ class Game {
   handleTimeout() {
     if (this.status !== 'playing') return;
     
-    const currentPlayer = this.players[this.turn];
+    const currentPlayerId = this.turn;
+    const currentPlayer = this.players[currentPlayerId];
     if (currentPlayer?.isBot) {
-      // Bot should have moved, force a random move
       const availableMoves = this.board
         .map((cell, i) => cell === null ? i : -1)
         .filter(i => i !== -1);
       
       if (availableMoves.length > 0) {
         const move = availableMoves[Math.floor(Math.random() * availableMoves.length)];
-        this.makeMove(this.turn, move);
+        const botSymbol = currentPlayer.symbol;
+        const result = this.makeMove(currentPlayerId, move);
+        
+        if (result.ok) {
+          const humanPlayerId = Object.keys(this.players).find(pid => !this.players[pid].isBot);
+          const humanSock = humanPlayerId ? (io.sockets.sockets.get ? io.sockets.sockets.get(humanPlayerId) : io.sockets.sockets[humanPlayerId]) : null;
+          
+          const moveData = {
+            position: move,
+            symbol: botSymbol,
+            nextTurn: this.turn,
+            board: this.board,
+            turnDeadline: this.turnDeadlineAt,
+            message: this.turn === humanPlayerId ? 'Your move' : "Opponent's move"
+          };
+          
+          io.to(this.id).emit('moveMade', moveData);
+          if (humanSock && humanSock.connected) {
+            humanSock.emit('moveMade', moveData);
+          }
+          io.to(this.id).emit('boardUpdate', {
+            board: this.board,
+            lastMove: move
+          });
+        }
+        
+        if (result.winner) {
+          handleGameEnd(this.id, result.winner, result.winLine);
+        } else if (result.draw) {
+          handleDraw(this.id);
+        } else if (this.players[this.turn]?.isBot) {
+          makeBotMove(this.id, this.turn);
+        }
       }
     } else {
-      // Human timeout - opponent wins
       const playerIds = Object.keys(this.players);
       const otherPlayer = playerIds.find(id => id !== this.turn);
       handleGameEnd(this.id, otherPlayer);
@@ -2201,7 +2232,9 @@ function makeBotMove(gameId, botId) {
   if (move === null || move === undefined) return;
   
   // Apply human-like delay (use the thinking time from bot instance)
-  const delay = bot.thinkingTime || bot.generateThinkingTime();
+  const desiredDelay = bot.thinkingTime || bot.generateThinkingTime();
+  const timeLeftMs = typeof game.turnDeadlineAt === 'number' ? (game.turnDeadlineAt - Date.now()) : null;
+  const delay = typeof timeLeftMs === 'number' ? Math.max(0, Math.min(desiredDelay, timeLeftMs - 200)) : desiredDelay;
   
   setTimeout(() => {
     // Double-check game still exists and it's bot's turn
