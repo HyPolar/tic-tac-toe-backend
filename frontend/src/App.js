@@ -80,6 +80,7 @@ export default function App() {
   const audioCtxRef = useRef(null);
   const touchStartRef = useRef(null);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [moveLocked, setMoveLocked] = useState(false);
 
   // Calculate turn progress for timer visualization
   const turnProgress = useMemo(() => {
@@ -130,24 +131,36 @@ export default function App() {
   }, [gameState]);
 
   useEffect(() => {
-    const s = io(BACKEND_URL, { transports: ['websocket', 'polling'] });
+    const s = io(BACKEND_URL, {
+      transports: ['websocket', 'polling'],
+      autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
+    });
     setSocket(s);
 
     const handlers = {
       connect: () => {
         setSocketId(s.id);
         setConnected(true);
+        setMoveLocked(false);
       },
       disconnect: () => {
         setConnected(false);
+        setMoveLocked(false);
         setMessage('Disconnected. Retrying...');
       },
       connect_error: (err) => {
         setConnected(false);
+        setMoveLocked(false);
         setMessage(`Cannot reach server at ${BACKEND_URL}`);
       },
       error: (payload) => {
         const msg = typeof payload === 'string' ? payload : (payload?.message || 'Error');
+        setMoveLocked(false);
         // Suppress noisy errors during/after a game that can be caused by late clicks/race conditions
         if ((msg === 'Game not started' || msg === 'Game not found' || msg === 'Invalid move' || msg === 'Game already finished')
             && (gameStateRef.current === 'playing' || gameStateRef.current === 'finished')) {
@@ -297,6 +310,7 @@ export default function App() {
       },
       startGame: ({ gameId, symbol, turn, board, message, turnDeadline }) => {
         console.log('startGame event received:', { gameId, symbol, turn, board, message });
+        setMoveLocked(false);
         // Clear waiting/match timers on actual game start
         if (waitingIntervalRef.current) { clearInterval(waitingIntervalRef.current); waitingIntervalRef.current = null; }
         if (matchIntervalRef.current) { clearInterval(matchIntervalRef.current); matchIntervalRef.current = null; }
@@ -329,6 +343,7 @@ export default function App() {
       moveMade: ({ position, symbol, nextTurn, board, turnDeadline, message }) => {
         // Force immediate board update - don't wait for any conditions
         console.log('moveMade event received:', { position, symbol, nextTurn, board, message });
+        setMoveLocked(false);
         // Always update board immediately when move is received
         if (board && Array.isArray(board)) {
           setBoard([...board]); // Create new array to force React re-render
@@ -341,6 +356,7 @@ export default function App() {
         setMessage(message || (nextTurn === s.id ? 'Your move' : "Opponent's move"));
       },
       nextTurn: ({ turn, turnDeadline, message }) => {
+        setMoveLocked(false);
         setTurn(turn);
         setTurnDeadline(turnDeadline || null);
         const ttl = turnDeadline ? Math.max(1, Math.ceil((Number(turnDeadline) - Date.now()) / 1000)) : null;
@@ -348,6 +364,7 @@ export default function App() {
         setMessage(message || (turn === s.id ? 'Your move' : "Opponent's move"));
       },
       gameEnd: ({ message, winnerSymbol, winningLine, streakBonus: bonus, autoContinue }) => {
+        setMoveLocked(false);
         // Save to history
         const isWin = !!(winnerSymbol && symbol && winnerSymbol === symbol);
         const isDraw = winnerSymbol == null;
@@ -419,7 +436,18 @@ export default function App() {
     }
     s.connect();
 
+    const watchdog = setInterval(() => {
+      if (!s.connected) {
+        try {
+          s.connect();
+        } catch {
+          // no-op
+        }
+      }
+    }, 3000);
+
     return () => {
+      clearInterval(watchdog);
       Object.entries(handlers).forEach(([evt, fn]) => s.off(evt, fn));
       s.disconnect();
     };
@@ -615,12 +643,17 @@ export default function App() {
       setMessage('Cell already taken');
       return;
     }
+
+    if (moveLocked) {
+      return;
+    }
     
     // Play sound and haptics
     sfxPlay('click');
     triggerHaptic([10]);
     
     // Send move to server
+    setMoveLocked(true);
     socket.emit('makeMove', { gameId, position: index });
   };
 
@@ -716,9 +749,11 @@ export default function App() {
   // Reset to menu and clean up game state
   const resetToMenu = () => {
     setCurrentScreen('menu');
+    setActiveTab('Menu');
     setGameState('menu');
     setPaymentInfo(null);
     setIsWaitingForPayment(false);
+    setMoveLocked(false);
     setBoard(Array(9).fill(null));
     setSymbol(null);
     setOpponent(null);
@@ -748,26 +783,28 @@ export default function App() {
 
   return (
     <div className={`app ${theme}`} ref={boardRef}>
-      <div className="header">
-        <div className="tabs">
-          {['Menu', 'History'].map(tab => (
-            <button
-              key={tab}
-              className={`tab ${activeTab === tab ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab(tab);
-                if (tab === 'History') {
-                  setCurrentScreen('history');
-                } else {
-                  setCurrentScreen('menu');
-                }
-              }}
-            >
-              {tab}
-            </button>
-          ))}
+      {(currentScreen === 'menu' || currentScreen === 'history') && (
+        <div className="header">
+          <div className="tabs">
+            {['Menu', 'History'].map(tab => (
+              <button
+                key={tab}
+                className={`tab ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab(tab);
+                  if (tab === 'History') {
+                    setCurrentScreen('history');
+                  } else {
+                    setCurrentScreen('menu');
+                  }
+                }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {activeTab === 'Menu' && currentScreen === 'menu' && (
         <div className="panel">
@@ -923,6 +960,7 @@ export default function App() {
           onResign={doResign}
           onReturnToMenu={resetToMenu}
           onShareResult={shareResult}
+          moveLocked={moveLocked}
           tiltEnabled={tiltEnabled}
           boardRef={boardRef}
           onBoardPointerMove={handleBoardPointer}

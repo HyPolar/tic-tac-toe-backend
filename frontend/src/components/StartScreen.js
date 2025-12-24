@@ -131,80 +131,24 @@ export default function StartScreen({
         </div>
 
         {/* Terms & Conditions - Prominent */}
-        <div className="form-section" style={{ 
-          background: 'rgba(255, 0, 102, 0.1)', 
-          border: '2px solid #ff0066', 
-          borderRadius: '12px', 
-          padding: '20px',
-          marginTop: '20px'
-        }}>
-          <div style={{ 
-            textAlign: 'center', 
-            marginBottom: '15px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-            color: '#ff0066'
-          }}>
-            ⚠️ IMPORTANT LEGAL NOTICE ⚠️
-          </div>
-          <div style={{ 
-            textAlign: 'center', 
-            marginBottom: '15px',
-            fontSize: '1rem',
-            color: '#fff',
-            lineHeight: '1.6'
-          }}>
-            <strong>By playing this game, you agree to our Terms & Conditions and Privacy Policy.</strong>
-          </div>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            gap: '15px',
-            marginBottom: '15px',
-            flexWrap: 'wrap'
-          }}>
-            <button 
-              type="button" 
-              className="link-button" 
-              onClick={onOpenTerms}
-              style={{ 
-                color: '#00ffcc', 
-                textDecoration: 'underline',
-                fontSize: '1rem',
-                fontWeight: 'bold'
-              }}
-            >
-              Read Terms & Conditions
-            </button>
-            <button 
-              type="button" 
-              className="link-button" 
-              onClick={onOpenPrivacy}
-              style={{ 
-                color: '#00ffcc', 
-                textDecoration: 'underline',
-                fontSize: '1rem',
-                fontWeight: 'bold'
-              }}
-            >
-              Read Privacy Policy
-            </button>
-          </div>
-          <label className="checkbox-label" style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            cursor: 'pointer'
-          }}>
-            <input 
-              type="checkbox" 
-              checked={acceptedTerms} 
+        <div className="form-section" style={{ marginTop: '20px' }}>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
               onChange={(e) => setAcceptedTerms(e.target.checked)}
               className="checkbox-input"
-              style={{ width: '20px', height: '20px', marginRight: '10px' }}
             />
-            <span className="checkbox-text" style={{ fontSize: '1rem', fontWeight: 'bold' }}>
-              I have read and agree to the Terms & Conditions and Privacy Policy
+            <span className="checkmark" aria-hidden="true" />
+            <span className="checkbox-text">
+              By playing, I read and agree to the{' '}
+              <button type="button" className="link-button" onClick={onOpenTerms}>
+                Terms &amp; Conditions
+              </button>{' '}
+              and{' '}
+              <button type="button" className="link-button" onClick={onOpenPrivacy}>
+                Privacy Policy
+              </button>
             </span>
           </label>
         </div>
