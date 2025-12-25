@@ -123,7 +123,12 @@ export default function App() {
   }, [history]);
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/health`).catch(() => {});
+    const wake = () => {
+      fetch(`${BACKEND_URL}/health`, { cache: 'no-store' }).catch(() => {});
+    };
+    wake();
+    const interval = setInterval(wake, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -133,21 +138,25 @@ export default function App() {
 
   useEffect(() => {
     const s = io(BACKEND_URL, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       autoConnect: false,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 25000,
     });
     setSocket(s);
+
+    const lastConnectErrorAtRef = { current: 0 };
+    const connectErrorCountRef = { current: 0 };
 
     const handlers = {
       connect: () => {
         setSocketId(s.id);
         setConnected(true);
         setMoveLocked(false);
+        connectErrorCountRef.current = 0;
       },
       disconnect: () => {
         setConnected(false);
@@ -157,7 +166,19 @@ export default function App() {
       connect_error: (err) => {
         setConnected(false);
         setMoveLocked(false);
-        setMessage(`Cannot reach server at ${BACKEND_URL}`);
+        const now = Date.now();
+        // Avoid spamming the UI; Socket.IO can emit frequent connect_error events while reconnecting.
+        if (now - lastConnectErrorAtRef.current > 1500) {
+          lastConnectErrorAtRef.current = now;
+          connectErrorCountRef.current += 1;
+          if (connectErrorCountRef.current >= 6) {
+            setMessage(`Cannot reach server at ${BACKEND_URL}`);
+          } else {
+            setMessage('Connecting...');
+          }
+        }
+        // Keep detailed error in console for debugging.
+        if (err) console.warn('Socket connect_error:', err);
       },
       error: (payload) => {
         const msg = typeof payload === 'string' ? payload : (payload?.message || 'Error');

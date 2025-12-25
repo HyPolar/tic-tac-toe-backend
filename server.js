@@ -169,9 +169,26 @@ app.set('trust proxy', 1);
 const server = http.createServer(app);
 // CORS origin from env (must be defined before using in Socket.IO)
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
+const normalizeOrigin = (origin) => {
+  if (typeof origin !== 'string') return origin;
+  return origin.replace(/\/+$/, '');
+};
+const allowedOrigins = ALLOWED_ORIGIN === '*'
+  ? '*'
+  : String(ALLOWED_ORIGIN)
+      .split(',')
+      .map(s => normalizeOrigin(s.trim()))
+      .filter(Boolean);
+const corsOrigin = (origin, cb) => {
+  if (allowedOrigins === '*') return cb(null, true);
+  if (!origin) return cb(null, true);
+  const normalized = normalizeOrigin(origin);
+  if (allowedOrigins.includes(normalized)) return cb(null, true);
+  return cb(new Error('Not allowed by CORS'));
+};
 const io = socketIo(server, {
   cors: {
-    origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -181,7 +198,7 @@ const io = socketIo(server, {
 
 // CORS - Enhanced for Render deployment
 app.use(cors({ 
-  origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN,
+  origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
