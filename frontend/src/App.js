@@ -139,7 +139,7 @@ export default function App() {
   useEffect(() => {
     const s = io(BACKEND_URL, {
       transports: ['polling', 'websocket'],
-      autoConnect: false,
+      autoConnect: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
@@ -456,20 +456,8 @@ export default function App() {
     for (const [event, handler] of Object.entries(handlers)) {
       s.on(event, handler);
     }
-    s.connect();
-
-    const watchdog = setInterval(() => {
-      if (!s.connected) {
-        try {
-          s.connect();
-        } catch {
-          // no-op
-        }
-      }
-    }, 3000);
 
     return () => {
-      clearInterval(watchdog);
       Object.entries(handlers).forEach(([evt, fn]) => s.off(evt, fn));
       s.disconnect();
     };
