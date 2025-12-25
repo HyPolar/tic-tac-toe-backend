@@ -673,10 +673,11 @@ async function fetchLightningAddress(authToken) {
 }
 
 // Process payout for winner with platform fee - Sea Battle implementation
-async function processPayout(winnerId, betAmount, gameId) {
+async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress) {
   try {
     const winner = players[winnerId];
-    if (!winner || !winner.lightningAddress) {
+    const winnerAddress = winner?.lightningAddress || winnerLightningAddress;
+    if (!winnerAddress) {
       throw new Error('Winner data not found');
     }
 
@@ -685,29 +686,39 @@ async function processPayout(winnerId, betAmount, gameId) {
     const winnerPayout = totalPot - platformFee;
 
     console.log(`Processing payout for game ${gameId}:`);
-    console.log(`  Winner: ${winner.lightningAddress}`);
+    console.log(`  Winner: ${winnerAddress}`);
     console.log(`  Total pot: ${totalPot} SATS`);
     console.log(`  Platform fee: ${platformFee} SATS`);
     console.log(`  Winner payout: ${winnerPayout} SATS`);
 
     // Send winner payout (amount in SATS, currency should be SATS)
     const winnerResult = await sendInstantPayment(
-      winner.lightningAddress,
+      winnerAddress,
       winnerPayout,
       'SATS', // currency
       'SATS', // targetCurrency
       `Tic-Tac-Toe winnings from game ${gameId}`
     );
 
+    const emitToWinnerAddress = (event, payload) => {
+      const directSock = io.sockets.sockets.get ? io.sockets.sockets.get(winnerId) : io.sockets.sockets[winnerId];
+      directSock?.emit(event, payload);
+      for (const [sid, meta] of Object.entries(players)) {
+        if (meta?.lightningAddress !== winnerAddress) continue;
+        const s = io.sockets.sockets.get ? io.sockets.sockets.get(sid) : io.sockets.sockets[sid];
+        s?.emit(event, payload);
+      }
+    };
+
     if (winnerResult.success) {
-      console.log(`✅ Winner payout sent: ${winnerPayout} SATS to ${winner.lightningAddress}`);
+      console.log(`✅ Winner payout sent: ${winnerPayout} SATS to ${winnerAddress}`);
       
       // Log successful payout
       transactionLogger.info({
         event: 'winner_payout_sent',
         gameId: gameId,
         winnerId: winnerId,
-        winnerAddress: winner.lightningAddress,
+        winnerAddress: winnerAddress,
         winnerPayout: winnerPayout,
         platformFee: platformFee,
         totalPot: totalPot,
@@ -715,7 +726,7 @@ async function processPayout(winnerId, betAmount, gameId) {
       });
       
       // Log player session with payout sent
-      logPlayerSession(winner.lightningAddress, {
+      logPlayerSession(winnerAddress, {
         event: 'payout_sent',
         playerId: winnerId,
         gameId: gameId,
@@ -723,10 +734,14 @@ async function processPayout(winnerId, betAmount, gameId) {
       });
       
       // Notify winner
-      const sock = io.sockets.sockets.get ? io.sockets.sockets.get(winnerId) : io.sockets.sockets[winnerId];
-      sock?.emit('payoutSent', {
+      emitToWinnerAddress('payoutSent', {
         amount: winnerPayout,
         paymentId: winnerResult.paymentId
+      });
+      emitToWinnerAddress('payment_sent', {
+        amount: winnerPayout,
+        status: 'sent',
+        txId: winnerResult.paymentId
       });
     } else {
       throw new Error(winnerResult.error || 'Winner payout failed');
@@ -762,7 +777,7 @@ async function processPayout(winnerId, betAmount, gameId) {
       event: 'game_payout_complete',
       gameId: gameId,
       winnerId: winnerId,
-      winnerAddress: winner.lightningAddress,
+      winnerAddress: winnerAddress,
       winnerPayout: winnerPayout,
       platformFee: platformFee,
       totalPot: totalPot,
@@ -776,9 +791,17 @@ async function processPayout(winnerId, betAmount, gameId) {
       winnerId: winnerId,
       error: error.message
     });
-    io.to(winnerId).emit('payment_error', {
-      error: error.message
-    });
+    const addr = (players[winnerId] && players[winnerId].lightningAddress) || winnerLightningAddress;
+    const payload = { error: error.message };
+    const directSock = io.sockets.sockets.get ? io.sockets.sockets.get(winnerId) : io.sockets.sockets[winnerId];
+    directSock?.emit('payment_error', payload);
+    if (addr) {
+      for (const [sid, meta] of Object.entries(players)) {
+        if (meta?.lightningAddress !== addr) continue;
+        const s = io.sockets.sockets.get ? io.sockets.sockets.get(sid) : io.sockets.sockets[sid];
+        s?.emit('payment_error', payload);
+      }
+    }
   }
 }
 
@@ -2249,9 +2272,12 @@ function makeBotMove(gameId, botId) {
   if (move === null || move === undefined) return;
   
   // Apply human-like delay (use the thinking time from bot instance)
-  const desiredDelay = bot.thinkingTime || bot.generateThinkingTime();
   const timeLeftMs = typeof game.turnDeadlineAt === 'number' ? (game.turnDeadlineAt - Date.now()) : null;
-  const delay = typeof timeLeftMs === 'number' ? Math.max(0, Math.min(desiredDelay, timeLeftMs - 200)) : desiredDelay;
+  const bufferMs = 900;
+  const maxDelay = typeof timeLeftMs === 'number' ? Math.max(250, Math.min(timeLeftMs - bufferMs, 3500)) : 3500;
+  const minDelay = Math.min(600, maxDelay);
+  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+  bot.thinkingTime = delay;
   
   setTimeout(() => {
     // Double-check game still exists and it's bot's turn
@@ -2735,18 +2761,41 @@ function handleGameEnd(gameId, winnerId) {
   // Emit personalized result to each participant
   const playerIds = Object.keys(game.players);
   for (const pid of playerIds) {
-    const msg = pid === winnerId ? 'You win!' : 'You lose';
-    const sock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
-    sock?.emit('gameEnd', {
+    const player = game.players[pid];
+    const msg = winnerSymbol == null ? "It's a draw!" : (player?.symbol === winnerSymbol ? 'You win!' : 'You lose');
+    const payload = {
       message: msg,
       winnerSymbol,
       winningLine
-    });
+    };
+    const directSock = io.sockets.sockets.get ? io.sockets.sockets.get(pid) : io.sockets.sockets[pid];
+    directSock?.emit('gameEnd', payload);
+
+    const addr = player?.lightningAddress;
+    if (addr) {
+      for (const [sid, meta] of Object.entries(players)) {
+        if (meta?.lightningAddress !== addr) continue;
+        const s = io.sockets.sockets.get ? io.sockets.sockets.get(sid) : io.sockets.sockets[sid];
+        s?.emit('gameEnd', payload);
+      }
+    }
   }
 
   // Process payout for human winners
   if (!game.players[winnerId]?.isBot) {
-    processPayout(winnerId, game.betAmount, gameId);
+    const winnerAddr = game.players[winnerId]?.lightningAddress;
+    let payoutSocketId = winnerId;
+    if (winnerAddr) {
+      for (const [sid, meta] of Object.entries(players)) {
+        if (meta?.lightningAddress !== winnerAddr) continue;
+        const s = io.sockets.sockets.get ? io.sockets.sockets.get(sid) : io.sockets.sockets[sid];
+        if (s && s.connected) {
+          payoutSocketId = sid;
+          break;
+        }
+      }
+    }
+    processPayout(payoutSocketId, game.betAmount, gameId, winnerAddr);
   } else {
     // Bot won - send platform fee only
     const platformFee = Math.floor(game.betAmount * 2 * 0.05);
