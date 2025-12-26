@@ -700,6 +700,9 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       `Tic-Tac-Toe winnings from game ${gameId}`
     );
 
+    const winnerPaymentId = winnerResult?.paymentId || winnerResult?.payment_id || winnerResult?.id || null;
+    const winnerOk = winnerResult && (winnerResult.success === true || winnerResult.success === undefined);
+
     const emitToWinnerAddress = (event, payload) => {
       const directSock = io.sockets.sockets.get ? io.sockets.sockets.get(winnerId) : io.sockets.sockets[winnerId];
       directSock?.emit(event, payload);
@@ -710,7 +713,7 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       }
     };
 
-    if (winnerResult.success) {
+    if (winnerOk) {
       console.log(`✅ Winner payout sent: ${winnerPayout} SATS to ${winnerAddress}`);
       
       // Log successful payout
@@ -736,15 +739,15 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       // Notify winner
       emitToWinnerAddress('payoutSent', {
         amount: winnerPayout,
-        paymentId: winnerResult.paymentId
+        paymentId: winnerPaymentId
       });
       emitToWinnerAddress('payment_sent', {
         amount: winnerPayout,
         status: 'sent',
-        txId: winnerResult.paymentId
+        txId: winnerPaymentId
       });
     } else {
-      throw new Error(winnerResult.error || 'Winner payout failed');
+      throw new Error(winnerResult?.error || 'Winner payout failed');
     }
 
     // Send platform fee to totodile@speed.app (matching Sea Battle)
@@ -756,7 +759,10 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       `Platform fee from game ${gameId}`
     );
 
-    if (platformResult.success) {
+    const platformPaymentId = platformResult?.paymentId || platformResult?.payment_id || platformResult?.id || null;
+    const platformOk = platformResult && (platformResult.success === true || platformResult.success === undefined);
+
+    if (platformOk) {
       console.log(`✅ Platform fee sent: ${platformFee} SATS to totodile@speed.app`);
       
       // Log successful platform fee
@@ -765,11 +771,11 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
         gameId: gameId,
         recipient: 'totodile@speed.app',
         amount: platformFee,
-        paymentId: platformResult.paymentId,
+        paymentId: platformPaymentId,
         timestamp: new Date().toISOString()
       });
     } else {
-      throw new Error(platformResult.error || 'Platform fee failed');
+      throw new Error(platformResult?.error || 'Platform fee failed');
     }
     
     console.log('Payout processed successfully with platform fee');
@@ -933,6 +939,10 @@ class Game {
         });
       }
     });
+
+    if (this.players[this.turn]?.isBot) {
+      makeBotMove(this.id, this.turn);
+    }
   }
   
   clearTurnTimer() {
@@ -2624,12 +2634,6 @@ io.on('connection', (socket) => {
       handleGameEnd(gameId, result.winner, result.winLine);
     } else if (result.draw) {
       handleDraw(gameId);
-    } else {
-      // Check if it's bot's turn
-      const botId = Object.keys(game.players).find(id => game.players[id].isBot);
-      if (botId && game.turn === botId) {
-        makeBotMove(gameId, botId);
-      }
     }
   });
 
@@ -2720,41 +2724,42 @@ function handleGameEnd(gameId, winnerId) {
   // Track game history for human player and update new systems
   const humanPlayer = winner?.isBot ? loser : winner;
   if (humanPlayer && !humanPlayer.isBot) {
-    const playerWon = !winner?.isBot;
-    const gameResult = {
-      isWin: playerWon,
-      isLoss: !playerWon,
-      betAmount: game.betAmount,
-      winnings: playerWon ? PAYOUTS[game.betAmount]?.winner || 0 : 0,
-      gameDuration: Date.now() - game.createdAt,
-      opponentMoves: game.moveCount || 0,
-      isPerfectGame: playerWon && (game.moveCount <= 3),
-      isSpeedWin: playerWon && (Date.now() - game.createdAt) < 30000,
-      isComebackWin: false // TODO: implement comeback detection
-    };
+    try {
+      const playerWon = !winner?.isBot;
+      const gameResult = {
+        isWin: playerWon,
+        isLoss: !playerWon,
+        betAmount: game.betAmount,
+        winnings: playerWon ? PAYOUTS[game.betAmount]?.winner || 0 : 0,
+        gameDuration: Date.now() - game.createdAt,
+        opponentMoves: game.moveCount || 0,
+        isPerfectGame: playerWon && (game.moveCount <= 3),
+        isSpeedWin: playerWon && (Date.now() - game.createdAt) < 30000,
+        isComebackWin: false // TODO: implement comeback detection
+      };
 
-    // Update all new systems
-    const streakBonus = streakSystem.updateStreak(humanPlayer.lightningAddress, gameResult);
-    const playerStats = globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats);
-    const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, playerStats, gameResult);
-    const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, playerStats);
+      const streakBonus = streakSystem.updateStreak(humanPlayer.lightningAddress, gameResult);
+      const playerStats = globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats);
+      const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, playerStats, gameResult);
+      const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, playerStats);
 
-    // Update legacy history
-    updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, playerWon);
-    console.log(`Updated all systems for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats, Streak bonus: ${streakBonus.sats} sats`);
-    
-    // Emit new achievements and rewards to player
-    const playerSocket = io.sockets.sockets.get(humanPlayer.socketId);
-    if (playerSocket) {
-      if (newAchievements.length > 0) {
-        playerSocket.emit('achievementsUnlocked', { achievements: newAchievements });
+      updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, playerWon);
+      console.log(`Updated all systems for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats, Streak bonus: ${streakBonus.sats} sats`);
+
+      const playerSocket = io.sockets.sockets.get ? io.sockets.sockets.get(humanPlayer.socketId) : io.sockets.sockets[humanPlayer.socketId];
+      if (playerSocket) {
+        if (newAchievements.length > 0) {
+          playerSocket.emit('achievementsUnlocked', { achievements: newAchievements });
+        }
+        if (mysteryBoxes.length > 0) {
+          playerSocket.emit('mysteryBoxEarned', { boxes: mysteryBoxes });
+        }
+        if (streakBonus.sats > 0) {
+          playerSocket.emit('streakBonus', { bonus: streakBonus });
+        }
       }
-      if (mysteryBoxes.length > 0) {
-        playerSocket.emit('mysteryBoxEarned', { boxes: mysteryBoxes });
-      }
-      if (streakBonus.sats > 0) {
-        playerSocket.emit('streakBonus', { bonus: streakBonus });
-      }
+    } catch (e) {
+      console.error('Post-game systems update failed:', e?.message || e);
     }
   }
   
