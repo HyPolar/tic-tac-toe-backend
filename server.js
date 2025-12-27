@@ -145,7 +145,18 @@ const logger = winston.createLogger({
 
 // Prefer IPv4 DNS resolution to avoid IPv6-related DNS/socket issues
 try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
-const ipv4Lookup = (hostname, options, cb) => dns.lookup(hostname, { family: 4, all: false }, cb);
+const ipv4Lookup = (hostname, options, cb) => {
+  const callback = typeof options === 'function' ? options : cb;
+  const opts = typeof options === 'object' && options !== null ? options : {};
+  const wantsAll = !!opts.all;
+
+  dns.lookup(hostname, { ...opts, family: 4, all: wantsAll }, (err, address, family) => {
+    if (wantsAll) {
+      return callback(err, address);
+    }
+    return callback(err, address, family);
+  });
+};
 const httpAgent = new http.Agent({ keepAlive: true, lookup: ipv4Lookup });
 const httpsAgent = new https.Agent({ keepAlive: true, lookup: ipv4Lookup, rejectUnauthorized: true });
 const httpClient = axios.create({ 
@@ -2283,10 +2294,12 @@ function makeBotMove(gameId, botId) {
   
   // Apply human-like delay (use the thinking time from bot instance)
   const timeLeftMs = typeof game.turnDeadlineAt === 'number' ? (game.turnDeadlineAt - Date.now()) : null;
-  const bufferMs = 900;
-  const maxDelay = typeof timeLeftMs === 'number' ? Math.max(250, Math.min(timeLeftMs - bufferMs, 3500)) : 3500;
-  const minDelay = Math.min(600, maxDelay);
-  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+  const bufferMs = 1400;
+  const hardMax = typeof timeLeftMs === 'number' ? Math.max(250, timeLeftMs - bufferMs) : 2500;
+  const maxDelay = Math.min(hardMax, 2500);
+  const minDelay = Math.min(450, maxDelay);
+  const span = Math.max(0, maxDelay - minDelay);
+  const delay = minDelay + Math.floor((Math.random() * Math.random()) * span);
   bot.thinkingTime = delay;
   
   setTimeout(() => {
