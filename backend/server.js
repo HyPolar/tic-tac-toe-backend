@@ -540,6 +540,23 @@ async function decodeAndFetchLnUrl(lnUrl) {
   }
 }
 
+async function fetchLnurlPayMetadata(lightningAddress) {
+  const [username, domain] = lightningAddress.split('@');
+  if (!username || !domain) {
+    throw new Error('Invalid Lightning address');
+  }
+
+  const lnurl = `https://${domain}/.well-known/lnurlp/${username}`;
+  const metadataResponse = await httpClient.get(lnurl, { timeout: 5000 });
+  const metadata = metadataResponse.data;
+
+  if (metadata.tag !== 'payRequest') {
+    throw new Error('Invalid LNURL metadata: not a payRequest');
+  }
+
+  return metadata;
+}
+
 // New Speed Wallet instant send function using the instant-send API - Sea Battle exact implementation
 async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', targetCurrency = 'SATS', note = '') {
 
@@ -548,20 +565,49 @@ async function sendInstantPayment(withdrawRequest, amount, currency = 'USD', tar
   Integrate actual sending logic here
   */
   try {
+    const normalizedWithdrawRequest = (withdrawRequest || '').toString().trim().replace(/^lightning:/i, '');
+    const amountNumber = Number(amount);
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      throw new Error('Invalid amount');
+    }
+
+    const currencyUpper = (currency || '').toString().toUpperCase();
+    const targetCurrencyUpper = (targetCurrency || '').toString().toUpperCase();
+
+    if (
+      normalizedWithdrawRequest.includes('@') &&
+      currencyUpper === 'SATS' &&
+      targetCurrencyUpper === 'SATS'
+    ) {
+      const metadata = await fetchLnurlPayMetadata(normalizedWithdrawRequest);
+      const minSendable = Number(metadata.minSendable);
+      const maxSendable = Number(metadata.maxSendable);
+      const amountMsats = Math.round(amountNumber * 1000);
+      if (Number.isFinite(minSendable) && Number.isFinite(maxSendable)) {
+        if (amountMsats < minSendable || amountMsats > maxSendable) {
+          const minSats = minSendable / 1000;
+          const maxSats = maxSendable / 1000;
+          throw new Error(
+            `Invalid amount: ${amountNumber} SATS is not within the sendable range for ${normalizedWithdrawRequest} (${minSats}-${maxSats} SATS)`
+          );
+        }
+      }
+    }
+
     console.log('Sending instant payment via Speed Wallet instant-send API:', {
-      withdrawRequest,
-      amount,
+      withdrawRequest: normalizedWithdrawRequest,
+      amount: amountNumber,
       currency,
       targetCurrency,
       note
     });
 
     const instantSendPayload = {
-      amount: parseFloat(amount),
+      amount: amountNumber,
       currency: currency,
       target_currency: targetCurrency,
       withdraw_method: 'lightning',
-      withdraw_request: withdrawRequest,
+      withdraw_request: normalizedWithdrawRequest,
       note: note
     };
 
@@ -675,9 +721,11 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       throw new Error('Winner data not found');
     }
 
-    const totalPot = betAmount * 2;
-    const platformFee = Math.floor(totalPot * 0.05); // 5% platform fee
-    const winnerPayout = totalPot - platformFee;
+    const bet = Number(betAmount);
+    const totalPot = bet * 2;
+    const mappedPayout = PAYOUTS[bet];
+    const platformFee = mappedPayout?.platformFee ?? Math.floor(totalPot * 0.05);
+    const winnerPayout = mappedPayout?.winner ?? (totalPot - platformFee);
 
     console.log(`Processing payout for game ${gameId}:`);
     console.log(`  Winner: ${winnerAddress}`);
@@ -744,32 +792,64 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       throw new Error(winnerResult?.error || 'Winner payout failed');
     }
 
-    // Send platform fee to totodile@speed.app (matching Sea Battle)
-    const platformResult = await sendInstantPayment(
-      'totodile@speed.app', // Platform Lightning address from Sea Battle
-      platformFee,
-      'SATS', // currency
-      'SATS', // targetCurrency
-      `Platform fee from game ${gameId}`
-    );
+    if (platformFee > 0) {
+      try {
+        const platformResult = await sendInstantPayment(
+          'totodile@speed.app', // Platform Lightning address from Sea Battle
+          platformFee,
+          'SATS', // currency
+          'SATS', // targetCurrency
+          `Platform fee from game ${gameId}`
+        );
 
-    const platformPaymentId = platformResult?.paymentId || platformResult?.payment_id || platformResult?.id || null;
-    const platformOk = platformResult && (platformResult.success === true || platformResult.success === undefined);
+        const platformPaymentId = platformResult?.paymentId || platformResult?.payment_id || platformResult?.id || null;
+        const platformOk = platformResult && (platformResult.success === true || platformResult.success === undefined);
 
-    if (platformOk) {
-      console.log(`✅ Platform fee sent: ${platformFee} SATS to totodile@speed.app`);
-      
-      // Log successful platform fee
-      transactionLogger.info({
-        event: 'platform_fee_sent',
-        gameId: gameId,
-        recipient: 'totodile@speed.app',
-        amount: platformFee,
-        paymentId: platformPaymentId,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      throw new Error(platformResult?.error || 'Platform fee failed');
+        if (platformOk) {
+          console.log(`✅ Platform fee sent: ${platformFee} SATS to totodile@speed.app`);
+          
+          // Log successful platform fee
+          transactionLogger.info({
+            event: 'platform_fee_sent',
+            gameId: gameId,
+            recipient: 'totodile@speed.app',
+            amount: platformFee,
+            paymentId: platformPaymentId,
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          errorLogger.error({
+            event: 'platform_fee_failed',
+            gameId: gameId,
+            recipient: 'totodile@speed.app',
+            amount: platformFee,
+            paymentId: platformPaymentId,
+            error: platformResult?.error || 'Platform fee failed',
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (platformError) {
+        const msg = platformError?.message || '';
+        if (msg.includes('Invalid amount')) {
+          transactionLogger.info({
+            event: 'platform_fee_skipped',
+            gameId: gameId,
+            recipient: 'totodile@speed.app',
+            amount: platformFee,
+            reason: msg,
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          console.error('Platform fee send error:', platformError);
+          errorLogger.error({
+            event: 'platform_fee_failed',
+            gameId: gameId,
+            recipient: 'totodile@speed.app',
+            amount: platformFee,
+            error: msg
+          });
+        }
+      }
     }
     
     console.log('Payout processed successfully with platform fee');
@@ -1317,6 +1397,109 @@ app.post('/api/send-payment', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+ if (process.env.NODE_ENV !== 'production') {
+   app.post('/api/dev/test-payout', async (req, res) => {
+     try {
+       const ip = (req.ip || '').replace('::ffff:', '');
+       if (ip !== '127.0.0.1' && ip !== '::1') {
+         return res.status(403).json({ error: 'Forbidden' });
+       }
+
+       const {
+         betAmount,
+         winnerAddress,
+         gameId,
+         includePlatformFee = true,
+         dryRun = false
+       } = req.body || {};
+
+       const bet = Number(betAmount);
+       if (!ALLOWED_BETS.includes(bet)) {
+         return res.status(400).json({ error: 'Invalid bet amount' });
+       }
+
+       if (!winnerAddress || typeof winnerAddress !== 'string') {
+         return res.status(400).json({ error: 'winnerAddress required' });
+       }
+
+       const normalizedWinnerAddress = winnerAddress.toString().trim().replace(/^lightning:/i, '');
+       const payout = PAYOUTS[bet];
+       if (!payout) {
+         return res.status(400).json({ error: 'No payout mapping for bet amount' });
+       }
+
+       const winnerPayout = payout.winner;
+       const platformFee = includePlatformFee ? payout.platformFee : 0;
+       const testGameId = (gameId && String(gameId)) || `devtest_${Date.now()}`;
+
+       if (dryRun) {
+         let winnerLnurl = null;
+         let platformLnurl = null;
+
+         if (normalizedWinnerAddress.includes('@')) {
+           const md = await fetchLnurlPayMetadata(normalizedWinnerAddress);
+           winnerLnurl = { minSendable: md.minSendable, maxSendable: md.maxSendable };
+         }
+
+         if (platformFee > 0) {
+           const md = await fetchLnurlPayMetadata('totodile@speed.app');
+           platformLnurl = { minSendable: md.minSendable, maxSendable: md.maxSendable };
+         }
+
+         return res.json({
+           success: true,
+           dryRun: true,
+           betAmount: bet,
+           winnerAddress: normalizedWinnerAddress,
+           winnerPayout,
+           platformFee,
+           winnerLnurl,
+           platformLnurl,
+           gameId: testGameId
+         });
+       }
+
+       const winnerResult = await sendInstantPayment(
+         normalizedWinnerAddress,
+         winnerPayout,
+         'SATS',
+         'SATS',
+         `Tic-Tac-Toe test payout from ${testGameId}`
+       );
+
+       let platformResult = null;
+       if (platformFee > 0) {
+         try {
+           platformResult = await sendInstantPayment(
+             'totodile@speed.app',
+             platformFee,
+             'SATS',
+             'SATS',
+             `Platform fee test from ${testGameId}`
+           );
+         } catch (platformError) {
+           platformResult = { error: platformError.message };
+         }
+       }
+
+       return res.json({
+         success: true,
+         dryRun: false,
+         betAmount: bet,
+         winnerAddress: normalizedWinnerAddress,
+         winnerPayout,
+         platformFee,
+         winnerResult,
+         platformResult,
+         gameId: testGameId
+       });
+     } catch (e) {
+       console.error('dev test-payout error:', e);
+       return res.status(500).json({ error: e.message });
+     }
+   });
+ }
 
 // API endpoint to get Lightning address from Speed
 app.post('/api/get-lightning-address', async (req, res) => {
@@ -2769,31 +2952,64 @@ function handleGameEnd(gameId, winnerId) {
     processPayout(payoutSocketId, game.betAmount, gameId, winnerAddr);
   } else {
     // Bot won - send platform fee only
-    const platformFee = Math.floor(game.betAmount * 2 * 0.05);
-    sendInstantPayment(
-      'totodile@speed.app',
-      platformFee,
-      'SATS', // currency
-      'SATS', // targetCurrency
-      `Platform fee from game ${gameId} (bot victory)`
-    ).then(result => {
-      if (result.success) {
-        transactionLogger.info({
-          event: 'platform_fee_sent',
+    const bet = Number(game.betAmount);
+    const mappedPayout = PAYOUTS[bet];
+    const platformFee = mappedPayout?.platformFee ?? Math.floor(bet * 2 * 0.05);
+
+    if (platformFee > 0) {
+      sendInstantPayment(
+        'totodile@speed.app',
+        platformFee,
+        'SATS', // currency
+        'SATS', // targetCurrency
+        `Platform fee from game ${gameId} (bot victory)`
+      ).then(result => {
+        const platformPaymentId = result?.paymentId || result?.payment_id || result?.id || null;
+        const platformOk = result && (result.success === true || result.success === undefined);
+        if (platformOk) {
+          transactionLogger.info({
+            event: 'platform_fee_sent',
+            gameId: gameId,
+            amount: platformFee,
+            recipient: 'totodile@speed.app',
+            paymentId: platformPaymentId,
+            botVictory: true
+          });
+        } else {
+          errorLogger.error({
+            event: 'platform_fee_failed',
+            gameId: gameId,
+            amount: platformFee,
+            recipient: 'totodile@speed.app',
+            paymentId: platformPaymentId,
+            error: result?.error || 'Platform fee failed',
+            botVictory: true
+          });
+        }
+      }).catch(err => {
+        const msg = err?.message || '';
+        if (msg.includes('Invalid amount')) {
+          transactionLogger.info({
+            event: 'platform_fee_skipped',
+            gameId: gameId,
+            amount: platformFee,
+            recipient: 'totodile@speed.app',
+            reason: msg,
+            botVictory: true,
+            timestamp: new Date().toISOString()
+          });
+          return;
+        }
+        errorLogger.error({
+          event: 'platform_fee_failed',
           gameId: gameId,
           amount: platformFee,
           recipient: 'totodile@speed.app',
+          error: msg,
           botVictory: true
         });
-      }
-    }).catch(err => {
-      errorLogger.error({
-        event: 'platform_fee_failed',
-        gameId: gameId,
-        error: err.message,
-        botVictory: true
       });
-    });
+    }
   }
 
   setTimeout(() => { delete games[gameId]; }, 30000);
