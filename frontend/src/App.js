@@ -242,7 +242,19 @@ export default function App() {
         }, 600000);
       },
       payment_sent: ({ amount, status, txId }) => {
+<<<<<<< C:\Users\OM\Desktop\Tic-Tac-Toe\frontend\src\App.js
+<<<<<<< C:\Users\OM\Desktop\Tic-Tac-Toe\frontend\src\App.js
+<<<<<<< C:\Users\OM\Desktop\Tic-Tac-Toe\frontend\src\App.js
         setMessage(`Payout sent: ${amount} SATS${txId ? ` (tx: ${txId})` : ''}`);
+=======
+        setMessage(`Payout sent: ${amount} SATS`);
+>>>>>>> c:\Users\OM\.windsurf\worktrees\Tic-Tac-Toe\Tic-Tac-Toe-d03761f9\frontend\src\App.js
+=======
+        setMessage(`Payout sent: ${amount} SATS`);
+>>>>>>> c:\Users\OM\.windsurf\worktrees\Tic-Tac-Toe\Tic-Tac-Toe-d03761f9\frontend\src\App.js
+=======
+        setMessage(`Payout sent: ${amount} SATS`);
+>>>>>>> c:\Users\OM\.windsurf\worktrees\Tic-Tac-Toe\Tic-Tac-Toe-d03761f9\frontend\src\App.js
       },
       payment_error: ({ error }) => {
         setMessage(`Payout error: ${error || 'Unknown error'}`);
