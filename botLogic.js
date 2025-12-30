@@ -16,7 +16,7 @@ const botLogger = winston.createLogger({
 const playerHistory = new Map();
 
 // Win/loss patterns - Updated per user specifications
-const PATTERN_50_SATS = ['W', 'L', 'W', 'W', 'L', 'L', 'L', 'W', 'L'];
+const PATTERN_50_SATS = ['L', 'W', 'L', 'L', 'W', 'W', 'W'];
 const PATTERN_300_PLUS = ['L', 'W', 'L', 'W', 'L', 'L', 'W', 'L', 'W'];
 
 // Track player bet history for 300+ sats logic
@@ -31,6 +31,8 @@ class BotPlayer {
     this.thinkingTime = this.generateThinkingTime();
     this.shouldWin = this.determineOutcome();
     this.drawCount = 0;
+    this.blunderAfterBotMoves = this.shouldWin ? null : (Math.floor(Math.random() * 3) + 3);
+    this.hasBlundered = false;
     // Updated draw logic per user specifications
     // Fair games (bot should lose): 2-5 draws before forced outcome
     // Cheating games (bot should win): 3-4 draws before forced outcome
@@ -64,7 +66,7 @@ class BotPlayer {
     const history = playerHistory.get(this.opponentAddress);
     
     if (this.betAmount === 50) {
-      // Use 50 sats pattern: W-L-W-W-L-L-L-W-L
+      // Use 50 sats pattern
       const outcome = PATTERN_50_SATS[history.patternIndex50 % PATTERN_50_SATS.length];
       history.patternIndex50++;
       history.gamesPlayed++;
@@ -145,7 +147,7 @@ class BotPlayer {
     return Math.random() > 0.5;
   }
 
-  evaluateBoard(board) {
+  evaluateBoard(board, botSymbol = 'O', opponentSymbol = 'X') {
     const lines = [
       [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
       [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
@@ -158,7 +160,7 @@ class BotPlayer {
       const values = [board[a], board[b], board[c]];
       
       // Can win
-      if (values.filter(v => v === 'O').length === 2 && values.includes(null)) {
+      if (values.filter(v => v === botSymbol).length === 2 && values.includes(null)) {
         return line[values.indexOf(null)];
       }
     }
@@ -168,7 +170,7 @@ class BotPlayer {
       const values = [board[a], board[b], board[c]];
       
       // Must block
-      if (values.filter(v => v === 'X').length === 2 && values.includes(null)) {
+      if (values.filter(v => v === opponentSymbol).length === 2 && values.includes(null)) {
         return line[values.indexOf(null)];
       }
     }
@@ -176,9 +178,9 @@ class BotPlayer {
     return null;
   }
 
-  getStrategicMove(board) {
+  getStrategicMove(board, botSymbol = 'O', opponentSymbol = 'X') {
     // Check if we can win or need to block
-    const critical = this.evaluateBoard(board);
+    const critical = this.evaluateBoard(board, botSymbol, opponentSymbol);
     if (critical !== null) return critical;
 
     // Prefer center
@@ -199,13 +201,13 @@ class BotPlayer {
     return null;
   }
 
-  makeNoobMove(board) {
+  makeNoobMove(board, botSymbol = 'O', opponentSymbol = 'X') {
     const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
     
     // In fair games (when bot should lose), play more like a noob
     // Sometimes miss obvious winning moves (50% chance)
     if (Math.random() < 0.5) {
-      const winMove = this.evaluateBoard(board);
+      const winMove = this.evaluateBoard(board, botSymbol, opponentSymbol);
       if (winMove !== null) {
         // Intentionally pick a different move
         const otherMoves = available.filter(m => m !== winMove);
@@ -222,11 +224,11 @@ class BotPlayer {
     }
     
     // Otherwise play somewhat strategically but not perfectly
-    return this.getStrategicMove(board) || available[Math.floor(Math.random() * available.length)];
+    return this.getStrategicMove(board, botSymbol, opponentSymbol) || available[Math.floor(Math.random() * available.length)];
   }
 
   // New method for making a silly mistake that leads to loss
-  makeSillyMistake(board) {
+  makeSillyMistake(board, botSymbol = 'O', opponentSymbol = 'X') {
     const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
     
     // Check if opponent can win next turn and DON'T block them (silly mistake)
@@ -241,7 +243,7 @@ class BotPlayer {
       const values = [board[a], board[b], board[c]];
       
       // If opponent has 2 in a row, DON'T block them (silly mistake)
-      if (values.filter(v => v === 'X').length === 2 && values.includes(null)) {
+      if (values.filter(v => v === opponentSymbol).length === 2 && values.includes(null)) {
         const blockMove = line[values.indexOf(null)];
         const nonBlockMoves = available.filter(move => move !== blockMove);
         
@@ -256,61 +258,174 @@ class BotPlayer {
     return available[Math.floor(Math.random() * available.length)];
   }
 
-  getNextMove(board, moveCount) {
+  minimax(board, turnSymbol, botSymbol, opponentSymbol, depth) {
+    const winner = this.getWinnerSymbol(board);
+    if (winner) {
+      if (winner === botSymbol) return 10 - depth;
+      if (winner === opponentSymbol) return depth - 10;
+      return 0;
+    }
+
+    const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
+    if (available.length === 0) return 0;
+
+    const isMaximizing = turnSymbol === botSymbol;
+    let bestScore = isMaximizing ? -Infinity : Infinity;
+
+    for (const move of available) {
+      board[move] = turnSymbol;
+      const nextTurn = turnSymbol === botSymbol ? opponentSymbol : botSymbol;
+      const score = this.minimax(board, nextTurn, botSymbol, opponentSymbol, depth + 1);
+      board[move] = null;
+
+      if (isMaximizing) {
+        if (score > bestScore) bestScore = score;
+      } else {
+        if (score < bestScore) bestScore = score;
+      }
+    }
+
+    return bestScore;
+  }
+
+  getWinnerSymbol(board) {
+    const lines = [
+      [0, 1, 2], [3, 4, 5], [6, 7, 8],
+      [0, 3, 6], [1, 4, 7], [2, 5, 8],
+      [0, 4, 8], [2, 4, 6]
+    ];
+
+    for (const [a, b, c] of lines) {
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+        return board[a];
+      }
+    }
+    if (board.every(cell => cell !== null)) return 'draw';
+    return null;
+  }
+
+  pickBestMoveByMinimax(board, botSymbol, opponentSymbol, excludedMoves = new Set()) {
+    const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1 && !excludedMoves.has(i));
+    if (available.length === 0) return null;
+
+    let bestScore = -Infinity;
+    let bestMoves = [];
+
+    for (const move of available) {
+      board[move] = botSymbol;
+      const score = this.minimax(board, opponentSymbol, botSymbol, opponentSymbol, 0);
+      board[move] = null;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMoves = [move];
+      } else if (score === bestScore) {
+        bestMoves.push(move);
+      }
+    }
+
+    return bestMoves[Math.floor(Math.random() * bestMoves.length)];
+  }
+
+  pickHumanLikeStrongMove(board, botSymbol, opponentSymbol, excludedMoves = new Set()) {
+    const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1 && !excludedMoves.has(i));
+    if (available.length === 0) return null;
+
+    const immediateWin = this.evaluateBoard(board, botSymbol, opponentSymbol);
+    if (immediateWin !== null && !excludedMoves.has(immediateWin)) {
+      return immediateWin;
+    }
+
+    const blockMove = this.evaluateBoard(board, opponentSymbol, botSymbol);
+    if (blockMove !== null && !excludedMoves.has(blockMove)) {
+      return blockMove;
+    }
+
+    const best = this.pickBestMoveByMinimax(board, botSymbol, opponentSymbol, excludedMoves);
+    if (best === null) return available[Math.floor(Math.random() * available.length)];
+    return best;
+  }
+
+  pickPlausibleBlunderMove(board, botSymbol, opponentSymbol) {
+    const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
+    if (available.length === 0) return null;
+
+    const givesOpponentWin = [];
+    for (const move of available) {
+      board[move] = botSymbol;
+      const oppWin = this.evaluateBoard(board, opponentSymbol, botSymbol);
+      board[move] = null;
+      if (oppWin !== null) {
+        givesOpponentWin.push(move);
+      }
+    }
+    if (givesOpponentWin.length > 0) {
+      const preferred = givesOpponentWin.filter(m => [4, 0, 2, 6, 8].includes(m));
+      const pool = preferred.length > 0 ? preferred : givesOpponentWin;
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    const mustBlock = this.evaluateBoard(board, opponentSymbol, botSymbol);
+    if (mustBlock !== null) {
+      const nonBlock = available.filter(m => m !== mustBlock);
+      if (nonBlock.length > 0) {
+        const preferred = nonBlock.filter(m => [4, 0, 2, 6, 8].includes(m));
+        const pool = preferred.length > 0 ? preferred : nonBlock;
+        return pool[Math.floor(Math.random() * pool.length)];
+      }
+    }
+
+    const winNow = this.evaluateBoard(board, botSymbol, opponentSymbol);
+    const excluded = new Set();
+    if (winNow !== null) excluded.add(winNow);
+    const move = this.pickBestMoveByMinimax(board, botSymbol, opponentSymbol, excluded);
+    if (move !== null) return move;
+
+    return available[Math.floor(Math.random() * available.length)];
+  }
+
+  getNextMove(board, moveCount, botSymbol = 'O', opponentSymbol = 'X') {
     const available = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
     
     if (available.length === 0) return null;
 
-    // Check if this could be a draw
-    const isDraw = this.checkPotentialDraw(board);
-    
-    if (isDraw && this.drawCount >= this.maxDrawsBeforeEnd) {
-      // Time to end the game based on predetermined outcome after sufficient draws
-      if (this.shouldWin) {
-        // Bot should win after 3-4 draws - play strategically to win
-        const winningMove = this.getStrategicMove(board);
-        botLogger.info({
-          event: 'bot_forced_win_after_draws',
-          gameId: this.gameId,
-          drawCount: this.drawCount,
-          maxDraws: this.maxDrawsBeforeEnd,
-          selectedMove: winningMove
-        });
-        return winningMove || available[0];
-      } else {
-        // Bot should lose after 2-5 draws - make a "silly mistake"
-        const sillyMove = this.makeSillyMistake(board);
-        botLogger.info({
-          event: 'bot_silly_mistake_after_draws',
-          gameId: this.gameId,
-          drawCount: this.drawCount,
-          maxDraws: this.maxDrawsBeforeEnd,
-          selectedMove: sillyMove
-        });
-        return sillyMove;
-      }
-    }
+    const botMovesSoFar = board.filter(cell => cell === botSymbol).length;
+    const nextBotMoveNumber = botMovesSoFar + 1;
 
-    // Normal gameplay
     if (this.shouldWin) {
-      // In cheating games (bot should win) - play strategically with full tensed competition
-      // Play optimally 90% of the time to create tension
-      if (Math.random() < 0.9) {
-        return this.getStrategicMove(board) || available[Math.floor(Math.random() * available.length)];
-      } else {
-        // Occasional slight mistake to seem human
-        return available[Math.floor(Math.random() * available.length)];
-      }
+      const bestMove = this.pickHumanLikeStrongMove(board, botSymbol, opponentSymbol);
+      return bestMove !== null ? bestMove : available[Math.floor(Math.random() * available.length)];
     } else {
-      // In fair games (bot should lose) - play like a noob but with some tension
-      // Give some competition but make crucial mistakes
-      if (Math.random() < 0.4) {
-        // Play strategically sometimes to create tension
-        return this.getStrategicMove(board) || available[Math.floor(Math.random() * available.length)];
-      } else {
-        // Make noob moves more often
-        return this.makeNoobMove(board);
+      if (!this.hasBlundered && typeof this.blunderAfterBotMoves === 'number' && nextBotMoveNumber >= this.blunderAfterBotMoves) {
+        const blunderMove = this.pickPlausibleBlunderMove(board, botSymbol, opponentSymbol);
+        this.hasBlundered = true;
+        return blunderMove !== null ? blunderMove : available[Math.floor(Math.random() * available.length)];
       }
+
+      if (this.hasBlundered) {
+        const mustBlock = this.evaluateBoard(board, opponentSymbol, botSymbol);
+        if (mustBlock !== null) {
+          const nonBlock = available.filter(m => m !== mustBlock);
+          if (nonBlock.length > 0) {
+            const preferred = nonBlock.filter(m => [4, 0, 2, 6, 8].includes(m));
+            const pool = preferred.length > 0 ? preferred : nonBlock;
+            return pool[Math.floor(Math.random() * pool.length)];
+          }
+        }
+      }
+
+      const avoidImmediateWin = new Set();
+      const winNow = this.evaluateBoard(board, botSymbol, opponentSymbol);
+      if (winNow !== null) {
+        avoidImmediateWin.add(winNow);
+      }
+      const blockMove = this.evaluateBoard(board, opponentSymbol, botSymbol);
+      if (blockMove !== null && !this.hasBlundered) {
+        return blockMove;
+      }
+
+      const humanLike = this.pickHumanLikeStrongMove(board, botSymbol, opponentSymbol, avoidImmediateWin);
+      return humanLike !== null ? humanLike : available[Math.floor(Math.random() * available.length)];
     }
   }
 
@@ -341,9 +456,9 @@ class BotPlayer {
   }
 
   // Main method called by server
-  getMove(board) {
+  getMove(board, botSymbol = 'O', opponentSymbol = 'X') {
     const moveCount = board.filter(cell => cell !== null).length;
-    const move = this.getNextMove(board, moveCount);
+    const move = this.getNextMove(board, moveCount, botSymbol, opponentSymbol);
     
     if (move !== null) {
       this.logMove(move, board);

@@ -1878,7 +1878,7 @@ app.get('/api/bots/patterns', (req, res) => {
       patterns: {
         '50_sats': {
           pattern: PATTERN_50_SATS,
-          description: 'Pattern: W-L-W-W-L-L-L-W-L (repeats) - Player wins first game, balanced gameplay'
+          description: 'Pattern: L-W-L-L-W-W-W (repeats) - Bot loses first, then plays human-like'
         },
         '300_plus': {
           pattern: PATTERN_300_PLUS,
@@ -2429,6 +2429,9 @@ function attemptMatchOrEnqueue(socketId) {
       game.addPlayer(botId, botAddress, true);
       games[gameId] = game;
 
+      const bot = new BotPlayer(gameId, player.betAmount, player.lightningAddress);
+      activeBots.set(gameId, bot);
+
       const s = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
       s?.join(gameId);
 
@@ -2471,8 +2474,13 @@ function makeBotMove(gameId, botId) {
   if (!bot) return;
   
   // Get move from bot logic
-  const moveCount = game.board.filter(cell => cell !== null).length;
-  const move = bot.getNextMove(game.board, moveCount);
+  const botSymbol = game.players[botId]?.symbol;
+  if (!botSymbol) return;
+  const opponentId = Object.keys(game.players).find(pid => pid !== botId);
+  const opponentSymbol = opponentId ? game.players[opponentId]?.symbol : null;
+  if (!opponentSymbol) return;
+
+  const move = bot.getMove([...game.board], botSymbol, opponentSymbol);
   if (move === null || move === undefined) return;
   
   // Apply human-like delay (use the thinking time from bot instance)
