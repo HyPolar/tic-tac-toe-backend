@@ -227,7 +227,7 @@ export default function App() {
           try {
             const response = await fetch(`${BACKEND_URL}/api/check-payment/${invoiceId}`);
             const result = await response.json();
-            if (result.success && result.status === 'paid') {
+            if (result.success && (result.status === 'paid' || result.status === 'completed')) {
               clearInterval(pollInterval);
               // Payment verified - this will trigger the paymentVerified socket event from backend
             }

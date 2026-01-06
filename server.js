@@ -4,6 +4,8 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
 const https = require('https');
@@ -268,6 +270,7 @@ const invoiceToSocket = {}; // invoiceId -> socketId
 const invoiceMeta = {}; // invoiceId -> { betAmount, lightningAddress }
 const userSessions = {}; // Maps acct_id to Lightning address
 const playerAcctIds = {}; // Maps playerId to acct_id
+const processedInvoices = new Set();
 const processedWebhooks = new Set();
 
 // Bot management
@@ -1973,6 +1976,12 @@ app.post('/webhook', express.json(), (req, res) => {
           return res.status(400).send('No invoiceId in webhook payload');
         }
 
+        if (processedInvoices.has(invoiceId)) {
+          return res.status(200).send('Already processed');
+        }
+        processedInvoices.add(invoiceId);
+        setTimeout(() => processedInvoices.delete(invoiceId), 30 * 60 * 1000);
+
         const socketId = invoiceToSocket[invoiceId];
         if (!socketId) {
           logger.warn(`Webhook warning: No socketId found for invoice ${invoiceId}. Player may have disconnected before mapping was stored.`);
@@ -2005,6 +2014,11 @@ app.post('/webhook', express.json(), (req, res) => {
         }
         players[socketId].paid = true;
         logger.info('Payment verified for player', { playerId: socketId, invoiceId });
+
+        if (botSpawnTimers[socketId]) {
+          clearTimeout(botSpawnTimers[socketId]);
+          delete botSpawnTimers[socketId];
+        }
 
         // Log player session with payment received status
         console.log('💳 PAYMENT VERIFIED for:', players[socketId].lightningAddress);
@@ -2267,6 +2281,13 @@ function handleInvoicePaid(invoiceId, event) {
     invoiceToSocket,
     invoiceMeta
   });
+
+  if (processedInvoices.has(invoiceId)) {
+    console.log('Invoice already processed, skipping:', invoiceId);
+    return;
+  }
+  processedInvoices.add(invoiceId);
+  setTimeout(() => processedInvoices.delete(invoiceId), 30 * 60 * 1000);
   
   const socketId = invoiceToSocket[invoiceId];
   if (!socketId) {
@@ -2333,11 +2354,20 @@ function attemptMatchOrEnqueue(socketId) {
     return;
   }
 
+  if (botSpawnTimers[socketId]) {
+    clearTimeout(botSpawnTimers[socketId]);
+    delete botSpawnTimers[socketId];
+  }
+
   // Check if player is already in a game
   const existingGame = Object.values(games).find(g => g.players[socketId]);
   if (existingGame) {
-    console.log('Player already in game:', existingGame.id);
-    return;
+    if (existingGame.status === 'finished') {
+      delete existingGame.players[socketId];
+    } else {
+      console.log('Player already in game:', existingGame.id);
+      return;
+    }
   }
 
   // Try to find a waiting game with same bet amount
@@ -2423,40 +2453,46 @@ function attemptMatchOrEnqueue(socketId) {
       const botId = `bot_${uuidv4()}`;
       const botAddress = generateBotLightningAddress();
 
-      const gameId = uuidv4();
-      const game = new Game(gameId, player.betAmount);
-      game.addPlayer(socketId, player.lightningAddress);
-      game.addPlayer(botId, botAddress, true);
-      games[gameId] = game;
+      const currentGame = Object.values(games).find(g =>
+        g && g.players && g.players[socketId] && Object.keys(g.players).length === 1 && g.betAmount === player.betAmount && g.status !== 'finished'
+      );
 
-      const bot = new BotPlayer(gameId, player.betAmount, player.lightningAddress);
-      activeBots.set(gameId, bot);
+      if (!currentGame) {
+        delete botSpawnTimers[socketId];
+        return;
+      }
+
+      currentGame.addPlayer(botId, botAddress, true);
+
+      const bot = new BotPlayer(currentGame.id, player.betAmount, player.lightningAddress);
+      activeBots.set(currentGame.id, bot);
 
       const s = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
-      s?.join(gameId);
+      s?.join(currentGame.id);
 
       const startsIn = 5;
       const startAt = Date.now() + startsIn * 1000;
       s?.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
 
       setTimeout(() => {
-        game.status = 'playing';
-        game.startTurnTimer();
-        const turnDeadline = game.turnDeadlineAt || null;
+        if (!games[currentGame.id] || currentGame.status === 'finished') {
+          return;
+        }
+
+        currentGame.status = 'playing';
+        currentGame.startTurnTimer();
+        const turnDeadline = currentGame.turnDeadlineAt || null;
         s?.emit('startGame', {
-          gameId,
-          symbol: game.players[socketId].symbol,
-          turn: game.turn,
-          board: game.board,
-          message: game.turn === socketId ? 'Your move' : "Opponent's move",
+          gameId: currentGame.id,
+          symbol: currentGame.players[socketId].symbol,
+          turn: currentGame.turn,
+          board: currentGame.board,
+          message: currentGame.turn === socketId ? 'Your move' : "Opponent's move",
           turnDeadline
         });
 
-        // If the bot starts, delegate its first move to the shared helper
-        // so it emits a full moveMade event (with board + turnDeadline)
-        // just like all subsequent bot moves.
-        if (game.turn === botId) {
-          makeBotMove(gameId, botId);
+        if (currentGame.turn === botId) {
+          makeBotMove(currentGame.id, botId);
         }
       }, startsIn * 1000);
 
@@ -2485,12 +2521,12 @@ function makeBotMove(gameId, botId) {
   
   // Apply human-like delay (use the thinking time from bot instance)
   const timeLeftMs = typeof game.turnDeadlineAt === 'number' ? (game.turnDeadlineAt - Date.now()) : null;
-  const bufferMs = 1400;
-  const hardMax = typeof timeLeftMs === 'number' ? Math.max(250, timeLeftMs - bufferMs) : 2500;
-  const maxDelay = Math.min(hardMax, 2500);
-  const minDelay = Math.min(450, maxDelay);
+  const bufferMs = 500;
+  const hardMax = typeof timeLeftMs === 'number' ? Math.max(250, timeLeftMs - bufferMs) : BOT_THINK_TIME.max;
+  const maxDelay = Math.min(BOT_THINK_TIME.max, hardMax);
+  const minDelay = Math.min(BOT_THINK_TIME.min, maxDelay);
   const span = Math.max(0, maxDelay - minDelay);
-  const delay = minDelay + Math.floor((Math.random() * Math.random()) * span);
+  const delay = minDelay + Math.floor(Math.random() * span);
   bot.thinkingTime = delay;
   
   setTimeout(() => {
@@ -2552,7 +2588,7 @@ function makeBotMove(gameId, botId) {
 }
 
 // Handle game end with bot cleanup
-function handleGameEnd(gameId, winnerId) {
+function handleGameEndLegacy(gameId, winnerId) {
   const game = games[gameId];
   if (!game) return;
   
@@ -2769,12 +2805,17 @@ io.on('connection', (socket) => {
     
     // Find the player ID in the game that matches this socket
     let playerIdInGame = null;
-    for (const [pid, player] of Object.entries(game.players)) {
-      // Check if this is the current socket or if it matches by Lightning address
-      if (pid === socket.id || 
-          (players[socket.id] && player.lightningAddress === players[socket.id].lightningAddress)) {
-        playerIdInGame = pid;
-        break;
+    if (game.players[socket.id]) {
+      playerIdInGame = socket.id;
+    }
+
+    if (!playerIdInGame && players[socket.id]?.lightningAddress) {
+      const addr = players[socket.id].lightningAddress;
+      for (const [pid, player] of Object.entries(game.players)) {
+        if (player?.lightningAddress === addr) {
+          playerIdInGame = pid;
+          break;
+        }
       }
     }
     
@@ -2884,6 +2925,28 @@ function handleGameEnd(gameId, winnerId) {
 
   game.status = 'finished';
   game.clearTurnTimer();
+
+  const bot = activeBots.get(gameId);
+  if (bot) {
+    const humanId = Object.keys(game.players).find(id => !game.players[id].isBot);
+    if (humanId) {
+      const humanPlayer = game.players[humanId];
+      const playerWon = winnerId === humanId;
+      const botWon = !playerWon && winnerId && game.players[winnerId]?.isBot;
+      const isDraw = !winnerId;
+
+      bot.recordGameResult(playerWon);
+
+      let result;
+      if (isDraw) result = 'draw';
+      else if (botWon) result = 'win';
+      else result = 'loss';
+
+      botStats.recordGame(result, bot.betAmount, bot.thinkingTime);
+      console.log(`Bot game completed: ${gameId}, Result: ${result}, Bet: ${bot.betAmount} SATS, Human: ${humanPlayer.lightningAddress}`);
+    }
+    activeBots.delete(gameId);
+  }
 
   const winnerSymbol = game.players[winnerId]?.symbol || null;
   const winningLine = Array.isArray(game.winLine) ? game.winLine : [];
@@ -3067,7 +3130,21 @@ function handleGameEnd(gameId, winnerId) {
     }
   }
 
-  setTimeout(() => { delete games[gameId]; }, 30000);
+  for (const pid of Object.keys(game.players)) {
+    const waitingIndex = waitingQueue.findIndex(p => p.socketId === pid);
+    if (waitingIndex !== -1) {
+      waitingQueue.splice(waitingIndex, 1);
+    }
+
+    if (botSpawnTimers[pid]) {
+      clearTimeout(botSpawnTimers[pid]);
+      delete botSpawnTimers[pid];
+    }
+
+    delete players[pid];
+  }
+
+  setTimeout(() => { delete games[gameId]; }, 5000);
 }
 
 function handleDraw(gameId) {
@@ -3149,6 +3226,21 @@ function handleDraw(gameId) {
   }
   
   console.log(`Draw handled for game ${gameId}, new game started with ${game.startingPlayer} going first`);
+}
+
+const FRONTEND_BUILD_PATH = fs.existsSync(path.join(__dirname, 'frontend', 'build'))
+  ? path.join(__dirname, 'frontend', 'build')
+  : path.join(__dirname, 'backend', 'frontend', 'build');
+
+if (process.env.NODE_ENV === 'production' && fs.existsSync(FRONTEND_BUILD_PATH)) {
+  app.use(express.static(FRONTEND_BUILD_PATH));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health') || req.path.startsWith('/socket.io') || req.path.startsWith('/webhook')) {
+      return next();
+    }
+    return res.sendFile(path.join(FRONTEND_BUILD_PATH, 'index.html'));
+  });
 }
 
 // Keep-alive mechanism to prevent server shutdown

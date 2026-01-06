@@ -253,6 +253,7 @@ const invoiceToSocket = {}; // invoiceId -> socketId
 const invoiceMeta = {}; // invoiceId -> { betAmount, lightningAddress }
 const userSessions = {}; // Maps acct_id to Lightning address
 const playerAcctIds = {}; // Maps playerId to acct_id
+const processedInvoices = new Set();
 const processedWebhooks = new Set();
 
 // Bot management
@@ -1355,6 +1356,45 @@ app.get('/api/check-payment/:invoiceId', async (req, res) => {
   }
 });
 
+function handleInvoicePaid(invoiceId, event) {
+  if (!invoiceId) return;
+
+  if (processedInvoices.has(invoiceId)) {
+    console.log('Invoice already processed, skipping:', invoiceId);
+    return;
+  }
+  processedInvoices.add(invoiceId);
+  setTimeout(() => processedInvoices.delete(invoiceId), 30 * 60 * 1000);
+
+  const socketId = invoiceToSocket[invoiceId] || invoiceMeta[invoiceId]?.socketId;
+  if (!socketId) {
+    console.error('No socket found for invoice:', invoiceId);
+    return;
+  }
+
+  const meta = invoiceMeta[invoiceId] || {};
+
+  players[socketId] = players[socketId] || {};
+  players[socketId].paid = true;
+  if (meta.betAmount) players[socketId].betAmount = meta.betAmount;
+  if (meta.lightningAddress) players[socketId].lightningAddress = meta.lightningAddress;
+
+  if (botSpawnTimers[socketId]) {
+    clearTimeout(botSpawnTimers[socketId]);
+    delete botSpawnTimers[socketId];
+  }
+
+  const sock = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
+  if (sock) {
+    sock.emit('paymentVerified');
+  }
+
+  delete invoiceToSocket[invoiceId];
+  delete invoiceMeta[invoiceId];
+
+  attemptMatchOrEnqueue(socketId);
+}
+
 // Resolve LN input (Lightning address, LNURL, or BOLT11) to a BOLT11 invoice
 app.post('/api/resolve-ln', async (req, res) => {
   try {
@@ -1916,6 +1956,11 @@ function attemptMatchOrEnqueue(socketId) {
     return;
   }
 
+  if (botSpawnTimers[socketId]) {
+    clearTimeout(botSpawnTimers[socketId]);
+    delete botSpawnTimers[socketId];
+  }
+
   // Check if player is already in a game
   const existingGame = Object.values(games).find(g => g.players[socketId]);
   if (existingGame) {
@@ -1975,6 +2020,7 @@ function attemptMatchOrEnqueue(socketId) {
           gameId: game.id,
           symbol: game.players[pid].symbol,
           turn: game.turn,
+          board: game.board,
           message: game.turn === pid ? 'Your move' : "Opponent's move",
           turnDeadline
         });
@@ -2005,40 +2051,50 @@ function attemptMatchOrEnqueue(socketId) {
       const botId = `bot_${uuidv4()}`;
       const botAddress = generateBotLightningAddress();
 
-      const gameId = uuidv4();
-      const game = new Game(gameId, player.betAmount);
-      game.addPlayer(socketId, player.lightningAddress);
-      game.addPlayer(botId, botAddress, true);
-      games[gameId] = game;
+      const currentGame = Object.values(games).find(g =>
+        g && g.players && g.players[socketId] && Object.keys(g.players).length === 1 && g.betAmount === player.betAmount && g.status !== 'finished'
+      );
+
+      if (!currentGame) {
+        delete botSpawnTimers[socketId];
+        return;
+      }
+
+      currentGame.addPlayer(botId, botAddress, true);
 
       // Register bot brain for this game (required for makeBotMove)
-      const bot = new BotPlayer(gameId, player.betAmount, player.lightningAddress);
-      activeBots.set(gameId, bot);
+      const bot = new BotPlayer(currentGame.id, player.betAmount, player.lightningAddress);
+      activeBots.set(currentGame.id, bot);
 
       const s = io.sockets.sockets.get ? io.sockets.sockets.get(socketId) : io.sockets.sockets[socketId];
-      s?.join(gameId);
+      s?.join(currentGame.id);
 
       const startsIn = 5;
       const startAt = Date.now() + startsIn * 1000;
       s?.emit('matchFound', { opponent: { type: 'bot' }, startsIn, startAt });
 
       setTimeout(() => {
-        game.status = 'playing';
-        game.startTurnTimer();
-        const turnDeadline = game.turnDeadlineAt || null;
+        if (!games[currentGame.id] || currentGame.status === 'finished') {
+          return;
+        }
+
+        currentGame.status = 'playing';
+        currentGame.startTurnTimer();
+        const turnDeadline = currentGame.turnDeadlineAt || null;
         s?.emit('startGame', {
-          gameId,
-          symbol: game.players[socketId].symbol,
-          turn: game.turn,
-          message: game.turn === socketId ? 'Your move' : "Opponent's move",
+          gameId: currentGame.id,
+          symbol: currentGame.players[socketId].symbol,
+          turn: currentGame.turn,
+          board: currentGame.board,
+          message: currentGame.turn === socketId ? 'Your move' : "Opponent's move",
           turnDeadline
         });
 
         // If the bot starts, delegate its first move to the shared helper
         // so it emits a full moveMade event (with board + turnDeadline)
         // just like all subsequent bot moves.
-        if (game.turn === botId) {
-          makeBotMove(gameId, botId);
+        if (currentGame.turn === botId) {
+          makeBotMove(currentGame.id, botId);
         }
       }, startsIn * 1000);
 
@@ -2336,12 +2392,17 @@ io.on('connection', (socket) => {
     
     // Find the player ID in the game that matches this socket
     let playerIdInGame = null;
-    for (const [pid, player] of Object.entries(game.players)) {
-      // Check if this is the current socket or if it matches by Lightning address
-      if (pid === socket.id || 
-          (players[socket.id] && player.lightningAddress === players[socket.id].lightningAddress)) {
-        playerIdInGame = pid;
-        break;
+    if (game.players[socket.id]) {
+      playerIdInGame = socket.id;
+    }
+
+    if (!playerIdInGame && players[socket.id]?.lightningAddress) {
+      const addr = players[socket.id].lightningAddress;
+      for (const [pid, player] of Object.entries(game.players)) {
+        if (player?.lightningAddress === addr) {
+          playerIdInGame = pid;
+          break;
+        }
       }
     }
     
@@ -2752,7 +2813,9 @@ function handleDraw(gameId) {
   console.log(`Draw handled for game ${gameId}, new game started with ${game.startingPlayer} going first`);
 }
 
-const FRONTEND_BUILD_PATH = path.join(__dirname, 'frontend', 'build');
+const FRONTEND_BUILD_PATH = fs.existsSync(path.join(__dirname, '..', 'frontend', 'build'))
+  ? path.join(__dirname, '..', 'frontend', 'build')
+  : path.join(__dirname, 'frontend', 'build');
 if (process.env.NODE_ENV === 'production' && fs.existsSync(FRONTEND_BUILD_PATH)) {
   app.use(express.static(FRONTEND_BUILD_PATH));
 

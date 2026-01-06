@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: 'tic-tac-toe-server',
     script: 'server.js',
-    cwd: './backend',
+    cwd: '.',
     instances: 1,
     autorestart: true,
     watch: false,

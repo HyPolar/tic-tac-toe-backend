@@ -3,7 +3,7 @@ services:
     name: tic-tac-toe-backend
     env: node
     rootDir: .
-    buildCommand: npm install && npm install -g pm2 && cd backend/frontend && npm install && npm run build
+    buildCommand: npm install && npm install -g pm2 && cd frontend && npm install && npm run build
     startCommand: npm run pm2:start
     healthCheckPath: /health
     autoDeploy: true
