@@ -4,6 +4,8 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
 const https = require('https');
@@ -1917,8 +1919,12 @@ function attemptMatchOrEnqueue(socketId) {
   // Check if player is already in a game
   const existingGame = Object.values(games).find(g => g.players[socketId]);
   if (existingGame) {
-    console.log('Player already in game:', existingGame.id);
-    return;
+    if (existingGame.status === 'finished') {
+      delete existingGame.players[socketId];
+    } else {
+      console.log('Player already in game:', existingGame.id);
+      return;
+    }
   }
 
   // Try to find a waiting game with same bet amount
@@ -2061,12 +2067,12 @@ function makeBotMove(gameId, botId) {
   
   // Apply human-like delay (use the thinking time from bot instance)
   const timeLeftMs = typeof game.turnDeadlineAt === 'number' ? (game.turnDeadlineAt - Date.now()) : null;
-  const bufferMs = 1400;
-  const hardMax = typeof timeLeftMs === 'number' ? Math.max(250, timeLeftMs - bufferMs) : 2500;
-  const maxDelay = Math.min(hardMax, 2500);
-  const minDelay = Math.min(450, maxDelay);
+  const bufferMs = 500;
+  const hardMax = typeof timeLeftMs === 'number' ? Math.max(250, timeLeftMs - bufferMs) : BOT_THINK_TIME.max;
+  const maxDelay = Math.min(BOT_THINK_TIME.max, hardMax);
+  const minDelay = Math.min(BOT_THINK_TIME.min, maxDelay);
   const span = Math.max(0, maxDelay - minDelay);
-  const delay = minDelay + Math.floor((Math.random() * Math.random()) * span);
+  const delay = minDelay + Math.floor(Math.random() * span);
   bot.thinkingTime = delay;
   
   setTimeout(() => {
@@ -2113,7 +2119,7 @@ function makeBotMove(gameId, botId) {
 }
 
 // Handle game end with bot cleanup
-function handleGameEnd(gameId, winnerId) {
+function handleGameEndLegacy(gameId, winnerId) {
   const game = games[gameId];
   if (!game) return;
   
@@ -2446,6 +2452,29 @@ function handleGameEnd(gameId, winnerId) {
   game.status = 'finished';
   game.clearTurnTimer();
 
+  const bot = activeBots.get(gameId);
+  if (bot) {
+    const humanId = Object.keys(game.players).find(id => !game.players[id].isBot);
+    if (humanId) {
+      const humanPlayer = game.players[humanId];
+      const playerWon = winnerId === humanId;
+      const botWon = !playerWon && winnerId && game.players[winnerId]?.isBot;
+      const isDraw = !winnerId;
+
+      bot.recordGameResult(playerWon);
+
+      let result;
+      if (isDraw) result = 'draw';
+      else if (botWon) result = 'win';
+      else result = 'loss';
+
+      botStats.recordGame(result, bot.betAmount, bot.thinkingTime);
+
+      console.log(`Bot game completed: ${gameId}, Result: ${result}, Bet: ${bot.betAmount} SATS, Human: ${humanPlayer.lightningAddress}`);
+    }
+    activeBots.delete(gameId);
+  }
+
   const winnerSymbol = game.players[winnerId]?.symbol || null;
   const winningLine = Array.isArray(game.winLine) ? game.winLine : [];
   const winner = game.players[winnerId];
@@ -2628,7 +2657,21 @@ function handleGameEnd(gameId, winnerId) {
     }
   }
 
-  setTimeout(() => { delete games[gameId]; }, 30000);
+  for (const pid of Object.keys(game.players)) {
+    const waitingIndex = waitingQueue.findIndex(p => p.socketId === pid);
+    if (waitingIndex !== -1) {
+      waitingQueue.splice(waitingIndex, 1);
+    }
+
+    if (botSpawnTimers[pid]) {
+      clearTimeout(botSpawnTimers[pid]);
+      delete botSpawnTimers[pid];
+    }
+
+    delete players[pid];
+  }
+
+  setTimeout(() => { delete games[gameId]; }, 5000);
 }
 
 function handleDraw(gameId) {
@@ -2707,6 +2750,18 @@ function handleDraw(gameId) {
   }
 
   console.log(`Draw handled for game ${gameId}, new game started with ${game.startingPlayer} going first`);
+}
+
+const FRONTEND_BUILD_PATH = path.join(__dirname, 'frontend', 'build');
+if (process.env.NODE_ENV === 'production' && fs.existsSync(FRONTEND_BUILD_PATH)) {
+  app.use(express.static(FRONTEND_BUILD_PATH));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health') || req.path.startsWith('/socket.io')) {
+      return next();
+    }
+    return res.sendFile(path.join(FRONTEND_BUILD_PATH, 'index.html'));
+  });
 }
 
 // Keep-alive mechanism to prevent server shutdown
