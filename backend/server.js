@@ -795,7 +795,7 @@ async function processPayout(winnerId, betAmount, gameId, winnerLightningAddress
       throw new Error(winnerResult?.error || 'Winner payout failed');
     }
 
-    if (platformFee > 0) {
+    if (platformFee >= 500) {
       try {
         const platformResult = await sendInstantPayment(
           'totodile@speed.app', // Platform Lightning address from Sea Battle
@@ -2215,7 +2215,7 @@ function handleGameEndLegacy(gameId, winnerId) {
   if (!botInGame && winnerId && game.betAmount > 0) {
     const winner = game.players[winnerId];
     if (winner && winner.lightningAddress) {
-      processPayout(winner.lightningAddress, game.betAmount, gameId);
+      processPayout(winnerId, game.betAmount, gameId, winner.lightningAddress);
     }
   }
   
@@ -2594,9 +2594,14 @@ function handleGameEnd(gameId, winnerId) {
       };
 
       const streakBonus = streakSystem.updateStreak(humanPlayer.lightningAddress, gameResult);
-      const playerStats = globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats);
-      const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, playerStats, gameResult);
-      const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, playerStats);
+      const playerStats = (globalLeaderboards && typeof globalLeaderboards.updatePlayerStats === 'function')
+        ? globalLeaderboards.updatePlayerStats(humanPlayer.lightningAddress, gameResult, streakBonus.sats)
+        : ((globalLeaderboards && typeof globalLeaderboards.getPlayerStats === 'function')
+          ? globalLeaderboards.getPlayerStats(humanPlayer.lightningAddress)
+          : null);
+      const safeStats = playerStats || {};
+      const newAchievements = achievementSystem.checkAchievements(humanPlayer.lightningAddress, safeStats, gameResult);
+      const mysteryBoxes = mysteryBoxManager.checkForMysteryBox(humanPlayer.lightningAddress, gameResult, safeStats);
 
       updatePlayerHistory(humanPlayer.lightningAddress, game.betAmount, playerWon);
       console.log(`Updated all systems for ${humanPlayer.lightningAddress}: ${playerWon ? 'Won' : 'Lost'} with ${game.betAmount} sats, Streak bonus: ${streakBonus.sats} sats`);
@@ -2662,7 +2667,7 @@ function handleGameEnd(gameId, winnerId) {
     const mappedPayout = PAYOUTS[bet];
     const platformFee = mappedPayout?.platformFee ?? Math.floor(bet * 2 * 0.05);
 
-    if (platformFee > 0) {
+    if (platformFee >= 500) {
       sendInstantPayment(
         'totodile@speed.app',
         platformFee,
@@ -2714,6 +2719,16 @@ function handleGameEnd(gameId, winnerId) {
           error: msg,
           botVictory: true
         });
+      });
+    } else if (platformFee > 0) {
+      transactionLogger.info({
+        event: 'platform_fee_skipped',
+        gameId: gameId,
+        amount: platformFee,
+        recipient: 'totodile@speed.app',
+        reason: 'Below minimum sendable (min 500 SATS)',
+        botVictory: true,
+        timestamp: new Date().toISOString()
       });
     }
   }

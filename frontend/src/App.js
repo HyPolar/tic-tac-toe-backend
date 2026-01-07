@@ -789,7 +789,19 @@ export default function App() {
     setWaitingSecondsLeft(null);
     setMatchInfo(null);
     setMatchSecondsLeft(null);
+
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    } catch {}
   };
+
+  useEffect(() => {
+    if (currentScreen === 'menu' || currentScreen === 'history') {
+      try {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      } catch {}
+    }
+  }, [currentScreen]);
 
   return (
     <div className={`app ${theme}`} ref={boardRef}>
