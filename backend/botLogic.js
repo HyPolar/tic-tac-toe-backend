@@ -17,7 +17,7 @@ const playerHistory = new Map();
 
 // Win/loss patterns - Updated per user specifications
 const PATTERN_50_SATS = ['L', 'W', 'L', 'L', 'W', 'W', 'W'];
-const PATTERN_300_PLUS = ['L', 'W', 'L', 'W', 'L', 'L', 'W', 'L', 'W'];
+const PATTERN_300_PLUS = ['W', 'L'];
 
 // Track player bet history for 300+ sats logic
 const betHistory = new Map(); // lightningAddress -> { lastBet, lastResult, gameCount }
@@ -95,32 +95,7 @@ class BotPlayer {
       
       const betInfo = betHistory.get(this.opponentAddress);
       
-      // Check if this is a revenge game (2nd game with same bet after loss)
-      // Requirements: same LN address, same bet amount, 2nd game, previous was loss
-      if (betInfo.lastBet === this.betAmount && 
-          betInfo.lastResult === 'L' && 
-          betInfo.gameCount === 1) {
-        // Player lost first game with this bet amount - let them win on 2nd try (revenge logic)
-        betInfo.lastResult = 'W';
-        betInfo.gameCount++;
-        
-        botLogger.info({
-          event: 'bot_outcome_determined',
-          gameId: this.gameId,
-          betAmount: this.betAmount,
-          pattern: '300_plus_revenge',
-          outcome: 'player_wins',
-          reason: 'second_game_same_bet_after_loss',
-          opponentAddress: this.opponentAddress,
-          previousBet: betInfo.lastBet,
-          currentBet: this.betAmount,
-          gameCount: betInfo.gameCount
-        });
-        
-        return false; // Bot loses (player wins)
-      }
-      
-      // Use 300+ sats pattern: L-W-L-W-L-L-W-L-W
+      // Use 300+ sats pattern: W-L (repeats)
       const outcome = PATTERN_300_PLUS[history.patternIndex300 % PATTERN_300_PLUS.length];
       history.patternIndex300++;
       history.gamesPlayed++;
